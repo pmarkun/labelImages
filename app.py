@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QFileDialog, QAction,
     QDialog, QTextEdit, QVBoxLayout, QPushButton, QWidget,
     QInputDialog, QToolBar, QStatusBar, QHBoxLayout, QSizePolicy,
-    QScrollArea, QFrame
+    QScrollArea, QFrame, QListWidget, QListWidgetItem, QSplitter
 )
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import Qt, QSize
@@ -67,19 +67,28 @@ class ImageMover(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image Mover")
-        self.resize(1200, 800)
+        self.resize(1400, 800)
         self.setFocusPolicy(Qt.StrongFocus)
 
         self.config_path = os.path.join(os.getcwd(), 'config.yaml')
         self.ensure_config()
         self.config = self.load_config()
 
-        self.img_dir = QFileDialog.getExistingDirectory(self, "Selecione o diretório de imagens")
-        if not self.img_dir:
+        # Folder navigation list
+        self.dir_list = QListWidget()
+        self.dir_list.setFixedWidth(200)
+        self.dir_list.itemClicked.connect(self.on_dir_selected)
+
+        # Select initial folder
+        start = QFileDialog.getExistingDirectory(self, "Selecione o diretório de imagens")
+        if not start:
             sys.exit(0)
+        self.load_dirs(start)
 
-        self.undo_stack = []  # armazenar movimentos para desfazer
+        # Undo stack
+        self.undo_stack = []
 
+        # Toolbar
         toolbar = QToolBar()
         toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(toolbar)
@@ -88,16 +97,12 @@ class ImageMover(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(QIcon.fromTheme('edit-undo'), "Desfazer (Ctrl+Z)", self.undo_move)
         toolbar.addSeparator()
-        toolbar.addAction(QIcon.fromTheme('settings'), "Configurações", self.open_config_menu)
+        toolbar.addAction(QIcon.fromTheme('settings'), "Config", self.open_config_menu)
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
 
-        central = QWidget()
-        central.setFocusPolicy(Qt.StrongFocus)
-        layout = QHBoxLayout(central)
-        self.setCentralWidget(central)
-
+        # Image and labels panel
         img_frame = QFrame()
         img_layout = QVBoxLayout(img_frame)
         self.image_label = QLabel()
@@ -108,13 +113,11 @@ class ImageMover(QMainWindow):
         img_layout.addWidget(self.file_label)
         self.move_msg = QLabel(alignment=Qt.AlignCenter)
         img_layout.addWidget(self.move_msg)
-        layout.addWidget(img_frame, 3)
 
         side = QFrame()
         side.setFrameShape(QFrame.StyledPanel)
         side_layout = QVBoxLayout(side)
         side_layout.addWidget(QLabel("Labels:", alignment=Qt.AlignCenter))
-
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.labels_widget = QWidget()
@@ -122,8 +125,35 @@ class ImageMover(QMainWindow):
         scroll.setWidget(self.labels_widget)
         side_layout.addWidget(scroll)
 
-        layout.addWidget(side, 1)
+        # Splitter for dir list and main panel
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.dir_list)
+        main_widget = QWidget()
+        main_layout = QHBoxLayout(main_widget)
+        main_layout.addWidget(img_frame, 3)
+        main_layout.addWidget(side, 1)
+        splitter.addWidget(main_widget)
+        self.setCentralWidget(splitter)
 
+        # Load images in current folder
+        self.images = []
+        self.index = 0
+        self.on_dir_selected(self.dir_list.item(0))
+
+    def load_dirs(self, root):
+        self.current_dir = root
+        self.dir_list.clear()
+        for d in sorted(os.listdir(root)):
+            full = os.path.join(root, d)
+            if os.path.isdir(full):
+                count = len([f for f in os.listdir(full) if f.lower().endswith((".png",".jpg",".jpeg",".bmp",".gif"))])
+                if count > 0:
+                    
+                    item = QListWidgetItem(f"{d} ({count})", self.dir_list)
+                    item.setData(Qt.UserRole, full)
+
+    def on_dir_selected(self, item):
+        self.img_dir = os.path.join(self.current_dir, item.data(Qt.UserRole))
         self.images = sorted([f for f in os.listdir(self.img_dir)
                               if f.lower().endswith((".png",".jpg",".jpeg",".bmp",".gif"))])
         self.index = 0
@@ -215,7 +245,6 @@ class ImageMover(QMainWindow):
         os.makedirs(dst_folder, exist_ok=True)
         dst = os.path.join(dst_folder, name)
         shutil.move(src, dst)
-        # salvar para desfazer
         self.undo_stack.append((name, label, self.index))
         self.move_msg.setText(f"Movido para: {label}")
         self.images.pop(self.index)
@@ -243,7 +272,6 @@ class ImageMover(QMainWindow):
             self.status.showMessage("Arquivo não encontrado para desfazer", 2000)
 
     def keyPressEvent(self, event):
-        # processar undo via Ctrl+Z
         if event.key() == Qt.Key_Z and event.modifiers() & Qt.ControlModifier:
             self.undo_move()
             return

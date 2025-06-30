@@ -18,7 +18,7 @@ import io
 import yaml
 from PIL import Image
 from PIL import ImageQt
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QEvent
 from PyQt5.QtGui import QPixmap, QFont, QPalette, QColor, QKeyEvent
 from PyQt5.QtWidgets import (
     QAction,
@@ -75,6 +75,7 @@ class RunnerViewer(QMainWindow):
         self.backup_done = False
         self.undo_stack = []  # Para ctrl+z
         self.max_undo = 50   # Limite de undos
+        self.has_unsaved_changes = False  # Track de mudanças não salvas
 
         # Setup UI
         self.setup_ui()
@@ -185,12 +186,26 @@ class RunnerViewer(QMainWindow):
         """Setup the application menu"""
         open_json = QAction("📂 Abrir JSON", self)
         open_json.triggered.connect(self.load_json)
+        open_json.setShortcut("Ctrl+O")
+        
+        save_json = QAction("💾 Salvar", self)
+        save_json.triggered.connect(self.save_json)
+        save_json.setShortcut("Ctrl+S")
+        
+        save_as_json = QAction("💾 Salvar Como...", self)
+        save_as_json.triggered.connect(self.save_as_json)
+        save_as_json.setShortcut("Ctrl+Shift+S")
+        
         set_base = QAction("📁 Definir Base Path", self)
         set_base.triggered.connect(self.select_base_path)
         
         menu = self.menuBar().addMenu("Arquivo")
         if menu:
             menu.addAction(open_json)
+            menu.addSeparator()
+            menu.addAction(save_json)
+            menu.addAction(save_as_json)
+            menu.addSeparator()
             menu.addAction(set_base)
 
     def setup_ui(self) -> None:
@@ -234,6 +249,8 @@ class RunnerViewer(QMainWindow):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Categoria / Dorsal / Nome"])
         self.tree.currentItemChanged.connect(self.on_item_selected)
+        # Instala event filter para interceptar eventos de teclado
+        self.tree.installEventFilter(self)
         layout.addWidget(self.tree)
         
         return panel
@@ -397,11 +414,13 @@ class RunnerViewer(QMainWindow):
         
         # Limpa o stack de undo ao carregar novo arquivo
         self.undo_stack = []
+        self.has_unsaved_changes = False
         
         self.collect_stats()
         self.populate_tree()
         self.show_entry(0)
         self.update_status_bar()
+        self.update_window_title()
 
     def collect_stats(self) -> None:
         brands = set()
@@ -613,17 +632,50 @@ class RunnerViewer(QMainWindow):
             if idx < len(shoes):
                 shoes[idx]["new_label"] = brand
         self.data[self.current_index] = item
-        self.save_json()
+        self.mark_unsaved_changes()
         self.update_status_bar()
 
     def save_json(self) -> None:
+        """Salva no arquivo atual"""
         if not self.json_path:
+            self.save_as_json()
             return
         if not self.backup_done:
             shutil.copy(self.json_path, self.json_path + ".bak")
             self.backup_done = True
         with open(self.json_path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
+        self.has_unsaved_changes = False
+        self.update_window_title()
+
+    def save_as_json(self) -> None:
+        """Salva com novo nome de arquivo"""
+        if not self.data:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar JSON", filter="JSON Files (*.json)")
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+            self.json_path = path
+            self.backup_done = False  # Reset backup flag for new file
+            self.has_unsaved_changes = False
+            self.update_window_title()
+
+    def update_window_title(self) -> None:
+        """Atualiza o título da janela com indicador de mudanças"""
+        title = "🏃 Runner Data Viewer"
+        if self.json_path:
+            filename = os.path.basename(self.json_path)
+            title += f" - {filename}"
+        if self.has_unsaved_changes:
+            title += " *"
+        self.setWindowTitle(title)
+
+    def mark_unsaved_changes(self) -> None:
+        """Marca que há mudanças não salvas"""
+        if not self.has_unsaved_changes:
+            self.has_unsaved_changes = True
+            self.update_window_title()
 
     def on_item_selected(self, current: QTreeWidgetItem, previous: QTreeWidgetItem) -> None:
         """Handle tree item selection"""
@@ -700,7 +752,34 @@ class RunnerViewer(QMainWindow):
         new_index = min(self.current_index, len(self.data)-1)
         if new_index >= 0:
             self.show_entry(new_index)
-        self.save_json()
+        self.mark_unsaved_changes()
+        self.update_status_bar()
+
+    def remove_all_images_with_bib(self, bib_number) -> None:
+        """Remove todas as imagens com um número de dorsal específico"""
+        if not self.data or not bib_number:
+            return
+        
+        # Salva estado para undo
+        self.save_state()
+        
+        # Remove todas as imagens com o mesmo número de dorsal
+        indices_to_remove = []
+        for i, item in enumerate(self.data):
+            if item.get("bib", {}).get("number") == bib_number:
+                indices_to_remove.append(i)
+        
+        # Remove em ordem reversa para não afetar os índices
+        for i in reversed(indices_to_remove):
+            self.data.pop(i)
+            if i <= self.current_index and self.current_index > 0:
+                self.current_index -= 1
+        
+        self.populate_tree()
+        new_index = min(self.current_index, len(self.data)-1)
+        if new_index >= 0:
+            self.show_entry(new_index)
+        self.mark_unsaved_changes()
         self.update_status_bar()
 
     def keep_only_current_image(self) -> None:
@@ -731,7 +810,7 @@ class RunnerViewer(QMainWindow):
         
         self.populate_tree()
         self.show_entry(self.current_index)
-        self.save_json()
+        self.mark_unsaved_changes()
         self.update_status_bar()
 
     def toggle_checked(self) -> None:
@@ -746,7 +825,7 @@ class RunnerViewer(QMainWindow):
         current_checked = current_item.get('checked', False)
         current_item['checked'] = not current_checked
         
-        self.save_json()
+        self.mark_unsaved_changes()
         self.update_status_bar()
         
         # Atualiza a visualização para mostrar o status
@@ -757,6 +836,30 @@ class RunnerViewer(QMainWindow):
         if not self.data or self.current_index >= len(self.data):
             return False
         return self.data[self.current_index].get('checked', False)
+
+    def eventFilter(self, source, event):
+        """Intercepta eventos de teclado da tree widget para dar prioridade aos shortcuts"""
+        if source == self.tree and event.type() == QEvent.Type.KeyPress:
+            # Intercepta nossos shortcuts antes da tree widget processar
+            key = event.key()
+            modifiers = event.modifiers()
+            
+            # Nossos shortcuts personalizados
+            if key == Qt.Key_C or key == Qt.Key_K or key == Qt.Key_Delete or \
+               (modifiers == Qt.ControlModifier and key == Qt.Key_Z) or \
+               key == Qt.Key_Return or key == Qt.Key_Enter:
+                # Processa o evento no contexto da janela principal
+                self.keyPressEvent(event)
+                return True  # Bloqueia o evento para a tree widget
+            
+            # Para setas, permite navegação normal da tree mas também processa nossa lógica
+            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                # Deixa a tree processar primeiro (para navegação visual)
+                # Nosso keyPressEvent será chamado depois automaticamente
+                return False
+                
+        # Para outros eventos, deixa processar normalmente
+        return super().eventFilter(source, event)
 
     # navigation and editing -----------------------------------------------
     def keyPressEvent(self, event: QKeyEvent):
@@ -776,8 +879,19 @@ class RunnerViewer(QMainWindow):
             if is_checked:
                 QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e não pode ser removida. Pressione 'C' para deschequear primeiro.")
                 return
-            reply = QMessageBox.question(self, "Remover", "Remover imagem?", QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.Yes:
+            
+            # Verifica se a seleção na tree é um número de dorsal
+            current_tree_item = self.tree.currentItem()
+            if current_tree_item:
+                # Se é um item de nível de dorsal (tem filhos mas não tem índice de dados)
+                if current_tree_item.childCount() > 0 and current_tree_item.data(0, Qt.UserRole) is None:
+                    # É um número de dorsal, remove todas as imagens deste número
+                    bib_number = current_tree_item.text(0)
+                    self.remove_all_images_with_bib(bib_number)
+                else:
+                    # É uma imagem específica
+                    self.remove_current_image()
+            else:
                 self.remove_current_image()
             return
             
@@ -786,19 +900,12 @@ class RunnerViewer(QMainWindow):
             if is_checked:
                 QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e outras imagens do mesmo número não podem ser removidas. Pressione 'C' para deschequear primeiro.")
                 return
-            current_item = self.data[self.current_index]
-            bib_number = current_item.get("bib", {}).get("number")
-            if bib_number:
-                reply = QMessageBox.question(self, "Manter Apenas Esta", f"Manter apenas esta imagem para o dorsal {bib_number}?", QMessageBox.Yes | QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    self.keep_only_current_image()
+            self.keep_only_current_image()
             return
             
         # C - toggle checked status
         if event.key() == Qt.Key_C:
             self.toggle_checked()
-            status = "checada" if self.is_current_checked() else "desmarcada"
-            QMessageBox.information(self, "Status Alterado", f"Imagem {status}!")
             return
             
         # Navegação
@@ -817,6 +924,26 @@ class RunnerViewer(QMainWindow):
                 QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e não pode ser editada. Pressione 'C' para deschequear primeiro.")
             return
         super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        """Handle application close event"""
+        if self.has_unsaved_changes:
+            reply = QMessageBox.question(
+                self, 
+                "Mudanças não salvas", 
+                "Você tem mudanças não salvas. Deseja salvar antes de sair?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
+            
+            if reply == QMessageBox.Save:
+                self.save_json()
+                event.accept()
+            elif reply == QMessageBox.Discard:
+                event.accept()
+            else:  # Cancel
+                event.ignore()
+        else:
+            event.accept()
 
 
 def main() -> None:

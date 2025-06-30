@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -72,6 +73,8 @@ class RunnerViewer(QMainWindow):
         self.brands: List[str] = []
         self.bib_categories: List[str] = []
         self.backup_done = False
+        self.undo_stack = []  # Para ctrl+z
+        self.max_undo = 50   # Limite de undos
 
         # Setup UI
         self.setup_ui()
@@ -333,10 +336,11 @@ class RunnerViewer(QMainWindow):
         # Create scrollable area for brands
         brand_scroll = QScrollArea()
         brand_scroll.setWidgetResizable(True)
+        brand_scroll.setMinimumHeight(350)
         brand_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
         self.brand_panel = QWidget()
-        self.brand_layout = QVBoxLayout(self.brand_panel)
+        self.brand_layout = QGridLayout(self.brand_panel)
         self.brand_layout.setSpacing(5)
         self.brand_checks: List[QCheckBox] = []
         
@@ -344,15 +348,29 @@ class RunnerViewer(QMainWindow):
         brand_layout.addWidget(brand_scroll)
         layout.addWidget(brand_group)
         
-        # Action buttons
-        button_group = QGroupBox("Ações")
-        button_layout = QVBoxLayout(button_group)
+     
+        # Keyboard shortcuts info
+        shortcuts_group = QGroupBox("Atalhos de Teclado")
+        shortcuts_layout = QVBoxLayout(shortcuts_group)
         
-        save_btn = QPushButton("💾 Salvar Alterações")
-        save_btn.clicked.connect(self.apply_changes)
-        button_layout.addWidget(save_btn)
+        shortcuts_text = QLabel("""
+        <b>Navegação:</b><br>
+        ← → ↑ ↓ : Navegar<br>
+        Enter : Salvar mudanças<br><br>
         
-        layout.addWidget(button_group)
+        <b>Edição:</b><br>
+        <b>Del</b> : Remover imagem<br>
+        <b>K</b> : Manter só esta (remove outras do mesmo número)<br>
+        <b>C</b> : Marcar/desmarcar como checada<br>
+        <b>Ctrl+Z</b> : Desfazer última alteração<br><br>
+        
+        <small>💡 Imagens checadas ficam protegidas contra edição</small>
+        """)
+        shortcuts_text.setStyleSheet("font-size: 11px; color: #666; padding: 5px;")
+        shortcuts_text.setWordWrap(True)
+        shortcuts_layout.addWidget(shortcuts_text)
+        
+        layout.addWidget(shortcuts_group)
         
         # Add stretch to push everything to top
         layout.addStretch()
@@ -376,9 +394,14 @@ class RunnerViewer(QMainWindow):
         self.json_path = path
         with open(path, "r", encoding="utf-8") as f:
             self.data = json.load(f)[0:1000]  # Limit to 1000 entries for performance
+        
+        # Limpa o stack de undo ao carregar novo arquivo
+        self.undo_stack = []
+        
         self.collect_stats()
         self.populate_tree()
         self.show_entry(0)
+        self.update_status_bar()
 
     def collect_stats(self) -> None:
         brands = set()
@@ -402,9 +425,12 @@ class RunnerViewer(QMainWindow):
             chk.deleteLater()
         self.brand_checks = []
         
-        for b in self.brands:
+        # Organiza as marcas em duas colunas
+        for i, b in enumerate(self.brands):
             cb = QCheckBox(b)
-            self.brand_layout.addWidget(cb)
+            row = i // 2  # Linha
+            col = i % 2   # Coluna (0 ou 1)
+            self.brand_layout.addWidget(cb, row, col)
             self.brand_checks.append(cb)
 
     def populate_tree(self) -> None:
@@ -413,6 +439,8 @@ class RunnerViewer(QMainWindow):
         for idx, item in enumerate(self.data):
             cat = item.get("bib", {}).get("category", "?")
             bib_num = item.get("bib", {}).get("number", "?")
+            is_checked = item.get("checked", False)
+            
             cat_node = cats.get(cat)
             if not cat_node:
                 cat_node = QTreeWidgetItem(self.tree, [cat])
@@ -426,7 +454,13 @@ class RunnerViewer(QMainWindow):
                     break
             if bib_node is None:
                 bib_node = QTreeWidgetItem(cat_node, [str(bib_num)])
-            img_node = QTreeWidgetItem(bib_node, [item.get("filename", str(idx))])
+            
+            # Adiciona ícone para imagens checadas
+            img_name = item.get("filename", str(idx))
+            if is_checked:
+                img_name = "✓ " + img_name
+            
+            img_node = QTreeWidgetItem(bib_node, [img_name])
             img_node.setData(0, Qt.UserRole, idx)
         self.tree.expandAll()
 
@@ -440,6 +474,10 @@ class RunnerViewer(QMainWindow):
         index = max(0, min(index, len(self.data)-1))
         self.current_index = index
         data_item = self.data[index]
+        
+        # Verifica se está checada
+        is_checked = data_item.get('checked', False)
+        
         img_path = os.path.join(self.config.get("base_path", ""), data_item["filename"])
         try:
             img = Image.open(img_path)
@@ -447,9 +485,16 @@ class RunnerViewer(QMainWindow):
             self.thumb_label.setText("Imagem não encontrada")
             return
         
-        # Thumb of original
+        # Thumb of original - com indicador de status
         thumb_img = img.resize((150, int(150*img.height/img.width)))
         thumb_pixmap = self.pil_to_qpixmap(thumb_img)
+        
+        # Se está checada, adiciona uma borda verde
+        if is_checked:
+            self.thumb_label.setStyleSheet("border: 4px solid #28a745; border-radius: 8px; padding: 16px; background-color: #d4edda;")
+        else:
+            self.thumb_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 20px; background-color: #f8f9fa;")
+        
         self.thumb_label.setPixmap(thumb_pixmap)
         
         # Runner crop
@@ -513,19 +558,27 @@ class RunnerViewer(QMainWindow):
         
         self.shoe_box.addStretch()
 
-        # right panel data
+        # right panel data - desabilita se checado
         self.bib_number.setText(str(data_item.get("bib", {}).get("number", "")))
+        self.bib_number.setEnabled(not is_checked)
+        
         cat = data_item.get("bib", {}).get("category")
         if cat and cat in self.bib_categories:
             self.bib_category.setCurrentText(cat)
         else:
             self.bib_category.setCurrentIndex(-1)
+        self.bib_category.setEnabled(not is_checked)
+        
         for chk in self.brand_checks:
             chk.setChecked(False)
+            chk.setEnabled(not is_checked)
         brands_present = {shoe.get("new_label") or shoe.get("label") for shoe in data_item.get("shoes", [])}
         for chk in self.brand_checks:
             if chk.text() in brands_present:
                 chk.setChecked(True)
+
+        # Atualiza status bar
+        self.update_status_bar()
 
     def pil_to_qpixmap(self, pil_image):
         """Convert PIL Image to QPixmap"""
@@ -542,6 +595,10 @@ class RunnerViewer(QMainWindow):
     def apply_changes(self) -> None:
         if not self.data:
             return
+        
+        # Salva estado para undo antes de fazer mudanças
+        self.save_state()
+        
         item = self.data[self.current_index]
         # bib
         item.setdefault("bib", {})
@@ -557,6 +614,7 @@ class RunnerViewer(QMainWindow):
                 shoes[idx]["new_label"] = brand
         self.data[self.current_index] = item
         self.save_json()
+        self.update_status_bar()
 
     def save_json(self) -> None:
         if not self.json_path:
@@ -567,27 +625,183 @@ class RunnerViewer(QMainWindow):
         with open(self.json_path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
 
-    def on_item_selected(self, current: QTreeWidgetItem) -> None:
+    def on_item_selected(self, current: QTreeWidgetItem, previous: QTreeWidgetItem) -> None:
+        """Handle tree item selection"""
         if current is None:
             return
         idx = current.data(0, Qt.UserRole)
         if isinstance(idx, int):
             self.show_entry(idx)
 
+    # Undo functionality ------------------------------------------------
+    def save_state(self) -> None:
+        """Salva o estado atual para undo"""
+        import copy
+        state = {
+            'data': copy.deepcopy(self.data),
+            'current_index': self.current_index
+        }
+        self.undo_stack.append(state)
+        if len(self.undo_stack) > self.max_undo:
+            self.undo_stack.pop(0)
+    
+    def undo(self) -> None:
+        """Desfaz a última alteração"""
+        if not self.undo_stack:
+            return
+        state = self.undo_stack.pop()
+        self.data = state['data']
+        self.current_index = state['current_index']
+        self.populate_tree()
+        self.show_entry(self.current_index)
+        self.save_json()
+        self.update_status_bar()
+
+    # Status and progress -----------------------------------------------
+    def get_progress_stats(self) -> dict:
+        """Calcula estatísticas de progresso"""
+        total = len(self.data)
+        checked = sum(1 for item in self.data if item.get('checked', False))
+        return {
+            'total': total,
+            'checked': checked,
+            'percentage': (checked / total * 100) if total > 0 else 0
+        }
+
+    def update_status_bar(self) -> None:
+        """Atualiza a status bar com progresso"""
+        stats = self.get_progress_stats()
+        status_text = f"✓ Checadas: {stats['checked']} | Total: {stats['total']} | Progresso: {stats['percentage']:.1f}%"
+        self.statusBar().showMessage(status_text)
+
+    # Image management --------------------------------------------------
+    def remove_current_image(self) -> None:
+        """Remove a imagem atual (comando del)"""
+        if not self.data:
+            return
+        
+        # Salva estado para undo
+        self.save_state()
+        
+        current_item = self.data[self.current_index]
+        bib_number = current_item.get("bib", {}).get("number")
+        
+        # Remove a imagem
+        self.data.pop(self.current_index)
+        
+        # Se não há mais imagens com o mesmo número de dorsal, remove o número também
+        if bib_number:
+            has_same_bib = any(item.get("bib", {}).get("number") == bib_number for item in self.data)
+            if not has_same_bib:
+                # Aqui você pode adicionar lógica adicional se necessário
+                pass
+        
+        self.populate_tree()
+        new_index = min(self.current_index, len(self.data)-1)
+        if new_index >= 0:
+            self.show_entry(new_index)
+        self.save_json()
+        self.update_status_bar()
+
+    def keep_only_current_image(self) -> None:
+        """Mantém apenas a imagem atual para o número do dorsal (comando k)"""
+        if not self.data:
+            return
+        
+        # Salva estado para undo
+        self.save_state()
+        
+        current_item = self.data[self.current_index]
+        bib_number = current_item.get("bib", {}).get("number")
+        
+        if not bib_number:
+            return
+        
+        # Remove todas as outras imagens com o mesmo número de dorsal
+        indices_to_remove = []
+        for i, item in enumerate(self.data):
+            if i != self.current_index and item.get("bib", {}).get("number") == bib_number:
+                indices_to_remove.append(i)
+        
+        # Remove em ordem reversa para não afetar os índices
+        for i in reversed(indices_to_remove):
+            self.data.pop(i)
+            if i < self.current_index:
+                self.current_index -= 1
+        
+        self.populate_tree()
+        self.show_entry(self.current_index)
+        self.save_json()
+        self.update_status_bar()
+
+    def toggle_checked(self) -> None:
+        """Alterna o status de checado da imagem atual (comando c)"""
+        if not self.data:
+            return
+        
+        # Salva estado para undo
+        self.save_state()
+        
+        current_item = self.data[self.current_index]
+        current_checked = current_item.get('checked', False)
+        current_item['checked'] = not current_checked
+        
+        self.save_json()
+        self.update_status_bar()
+        
+        # Atualiza a visualização para mostrar o status
+        self.show_entry(self.current_index)
+
+    def is_current_checked(self) -> bool:
+        """Verifica se a imagem atual está checada"""
+        if not self.data or self.current_index >= len(self.data):
+            return False
+        return self.data[self.current_index].get('checked', False)
+
     # navigation and editing -----------------------------------------------
     def keyPressEvent(self, event: QKeyEvent):
         if not self.data:
             return
+            
+        # Ctrl+Z para undo
+        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Z:
+            self.undo()
+            return
+            
+        # Verifica se a imagem atual está checada (trava operações destrutivas)
+        is_checked = self.is_current_checked()
+        
+        # Del - remove imagem (só se não estiver checada)
         if event.key() == Qt.Key_Delete:
+            if is_checked:
+                QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e não pode ser removida. Pressione 'C' para deschequear primeiro.")
+                return
             reply = QMessageBox.question(self, "Remover", "Remover imagem?", QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
-                self.data.pop(self.current_index)
-                self.populate_tree()
-                new_index = min(self.current_index, len(self.data)-1)
-                if new_index >= 0:
-                    self.show_entry(new_index)
-                    self.save_json()
+                self.remove_current_image()
             return
+            
+        # K - manter apenas esta imagem para o número do dorsal (só se não estiver checada)
+        if event.key() == Qt.Key_K:
+            if is_checked:
+                QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e outras imagens do mesmo número não podem ser removidas. Pressione 'C' para deschequear primeiro.")
+                return
+            current_item = self.data[self.current_index]
+            bib_number = current_item.get("bib", {}).get("number")
+            if bib_number:
+                reply = QMessageBox.question(self, "Manter Apenas Esta", f"Manter apenas esta imagem para o dorsal {bib_number}?", QMessageBox.Yes | QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    self.keep_only_current_image()
+            return
+            
+        # C - toggle checked status
+        if event.key() == Qt.Key_C:
+            self.toggle_checked()
+            status = "checada" if self.is_current_checked() else "desmarcada"
+            QMessageBox.information(self, "Status Alterado", f"Imagem {status}!")
+            return
+            
+        # Navegação
         if event.key() == Qt.Key_Right or event.key() == Qt.Key_Down:
             self.current_index = min(self.current_index + 1, len(self.data)-1)
             self.show_entry(self.current_index)
@@ -597,7 +811,10 @@ class RunnerViewer(QMainWindow):
             self.show_entry(self.current_index)
             return
         if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
-            self.apply_changes()
+            if not is_checked:  # Só permite editar se não estiver checada
+                self.apply_changes()
+            else:
+                QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e não pode ser editada. Pressione 'C' para deschequear primeiro.")
             return
         super().keyPressEvent(event)
 

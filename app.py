@@ -78,6 +78,8 @@ class ImageMover(QMainWindow):
         self.dir_list = QListWidget()
         self.dir_list.setFixedWidth(200)
         self.dir_list.itemClicked.connect(self.on_dir_selected)
+        self.dir_list.itemDoubleClicked.connect(self.on_dir_double_clicked)  # Add double-click handler
+
 
         # Select initial folder
         start = QFileDialog.getExistingDirectory(self, "Selecione o diretório de imagens")
@@ -143,22 +145,51 @@ class ImageMover(QMainWindow):
     def load_dirs(self, root):
         self.current_dir = root
         self.dir_list.clear()
+
+        parent_dir = os.path.dirname(root)
+        if parent_dir != root:  # Don't add ".." if we're at filesystem root
+            parent_item = QListWidgetItem("..", self.dir_list)
+            parent_item.setData(Qt.UserRole, parent_dir)
+        
         for d in sorted(os.listdir(root)):
             full = os.path.join(root, d)
             if os.path.isdir(full):
-                count = len([f for f in os.listdir(full) if f.lower().endswith((".png",".jpg",".jpeg",".bmp",".gif"))])
-                if count > 0:
-                    
-                    item = QListWidgetItem(f"{d} ({count})", self.dir_list)
-                    item.setData(Qt.UserRole, full)
+                count = len([f for f in os.listdir(full) if f.lower().endswith((".png",".jpg",".jpeg",".bmp",".gif"))])                    
+                item = QListWidgetItem(f"{d} ({count})", self.dir_list)
+                item.setData(Qt.UserRole, full)
 
     def on_dir_selected(self, item):
+        if item.text() == "..":
+            return  # Don't load images for parent directory
         self.img_dir = os.path.join(self.current_dir, item.data(Qt.UserRole))
         self.images = sorted([f for f in os.listdir(self.img_dir)
                               if f.lower().endswith((".png",".jpg",".jpeg",".bmp",".gif"))])
         self.index = 0
         self.update_labels()
         self.update_image()
+
+    def on_dir_double_clicked(self, item):
+        if item.text() == "..":
+            parent_dir = item.data(Qt.UserRole)
+            self.load_dirs(parent_dir)
+            for i in range(self.dir_list.count()):
+                list_item = self.dir_list.item(i)
+                if list_item.text() != "..":
+                    self.dir_list.setCurrentItem(list_item)
+                    self.on_dir_selected(list_item)
+                    break
+        else:
+            # Change root to the double-clicked directory
+            new_root = item.data(Qt.UserRole)
+            self.load_dirs(new_root)
+            # Select first directory with images
+            if self.dir_list.count() > 0:
+                # Skip ".." if it exists, select first actual directory
+                first_dir_index = 1 if self.dir_list.item(0).text() == ".." else 0
+                if first_dir_index < self.dir_list.count():
+                    first_item = self.dir_list.item(first_dir_index)
+                    self.dir_list.setCurrentItem(first_item)
+                    self.on_dir_selected(first_item)
 
     def ensure_config(self):
         if not os.path.exists(self.config_path):

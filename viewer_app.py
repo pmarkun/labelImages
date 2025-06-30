@@ -13,11 +13,13 @@ import os
 import shutil
 import sys
 from typing import List
+import io
 
 import yaml
-from PIL import Image, ImageQt
+from PIL import Image
+from PIL import ImageQt
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QFont, QPalette, QColor, QKeyEvent
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -34,6 +36,10 @@ from PyQt5.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QFrame,
+    QScrollArea,
+    QGroupBox,
+    QPushButton,
 )
 
 DEFAULT_VIEWER_CONFIG = {"base_path": os.getcwd()}
@@ -55,9 +61,9 @@ def save_config(path: str, data: dict) -> None:
 class RunnerViewer(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("JSON Runner Viewer")
-        self.resize(1200, 800)
-
+        self.setWindowTitle("🏃 Runner Data Viewer")
+        self.setup_styling()
+        self.setMinimumSize(800, 600)
         self.config_path = os.path.join(os.getcwd(), "viewer_config.yaml")
         self.config = load_config(self.config_path)
         self.json_path = ""
@@ -67,59 +73,291 @@ class RunnerViewer(QMainWindow):
         self.bib_categories: List[str] = []
         self.backup_done = False
 
-        # UI
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Categoria/Bib/Nome"])
-        self.tree.currentItemChanged.connect(self.on_item_selected)
-
-        self.thumb_label = QLabel(alignment=Qt.AlignCenter)
-        self.runner_label = QLabel(alignment=Qt.AlignCenter)
-        self.shoe_box = QVBoxLayout()
-        self.shoe_container = QWidget()
-        self.shoe_container.setLayout(self.shoe_box)
-
-        middle = QWidget()
-        mid_layout = QVBoxLayout(middle)
-        mid_layout.addWidget(self.thumb_label)
-        middle_runner = QHBoxLayout()
-        middle_runner.addWidget(self.runner_label)
-        middle_runner.addWidget(self.shoe_container)
-        mid_layout.addLayout(middle_runner)
-
-        # Right panel with details
-        self.full_image = QLabel(alignment=Qt.AlignCenter)
-        self.bib_number = QLineEdit()
-        self.bib_category = QComboBox()
-        self.brand_checks: List[QCheckBox] = []
-        self.brand_panel = QWidget()
-        self.brand_layout = QHBoxLayout(self.brand_panel)
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.addWidget(self.full_image)
-        right_layout.addWidget(QLabel("Número:"))
-        right_layout.addWidget(self.bib_number)
-        right_layout.addWidget(QLabel("Categoria:"))
-        right_layout.addWidget(self.bib_category)
-        right_layout.addWidget(QLabel("Marca do Tênis:"))
-        right_layout.addWidget(self.brand_panel)
-        right_layout.addStretch()
-
-        splitter = QSplitter()
-        splitter.addWidget(self.tree)
-        splitter.addWidget(middle)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(1, 1)
-        self.setCentralWidget(splitter)
+        # Setup UI
+        self.setup_ui()
 
         # Menu
-        open_json = QAction("Abrir JSON", self)
+        self.setup_menu()
+
+    def setup_styling(self) -> None:
+        """Apply modern styling to the application"""
+
+        app = QApplication.instance()
+
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f8f9fa;
+                color: #333;
+            }
+            QTreeWidget {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 5px;
+                font-size: 13px;
+            }
+            QTreeWidget::item {
+                padding: 4px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QTreeWidget::item:selected {
+                background-color: #007acc;
+                color: white;
+            }
+            QLabel {
+                color: #333;
+                font-size: 13px;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #ddd;
+                border-radius: 8px;
+                margin: 10px 0px;
+                padding-top: 10px;
+                background-color: white;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+                color: #007acc;
+                font-size: 14px;
+            }
+            QLineEdit, QComboBox {
+                border: 2px solid #ddd;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 13px;
+                background-color: white;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border-color: #007acc;
+            }
+            QCheckBox {
+                spacing: 8px;
+                font-size: 12px;
+                padding: 4px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 2px solid #ddd;
+                border-radius: 3px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #007acc;
+                border-radius: 3px;
+                background-color: #007acc;
+            }
+            QPushButton {
+                background-color: #007acc;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #005fa3;
+            }
+            QPushButton:pressed {
+                background-color: #004578;
+            }
+            QSplitter::handle {
+                background-color: #ddd;
+                width: 3px;
+            }
+            QScrollArea {
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                background-color: white;
+            }
+        """)
+
+    def setup_menu(self) -> None:
+        """Setup the application menu"""
+        open_json = QAction("📂 Abrir JSON", self)
         open_json.triggered.connect(self.load_json)
-        set_base = QAction("Definir Base Path", self)
+        set_base = QAction("📁 Definir Base Path", self)
         set_base.triggered.connect(self.select_base_path)
+        
         menu = self.menuBar().addMenu("Arquivo")
-        menu.addAction(open_json)
-        menu.addAction(set_base)
+        if menu:
+            menu.addAction(open_json)
+            menu.addAction(set_base)
+
+    def setup_ui(self) -> None:
+        """Setup the main user interface"""
+        # Create main splitter
+        main_splitter = QSplitter(Qt.Horizontal)
+        
+        # Left panel - Tree view
+        left_panel = self.create_left_panel()
+        
+        # Center panel - Image display
+        center_panel = self.create_center_panel()
+        
+        # Right panel - Details and controls
+        right_panel = self.create_right_panel()
+        
+        main_splitter.addWidget(left_panel)
+        main_splitter.addWidget(center_panel)
+        main_splitter.addWidget(right_panel)
+        
+        # Set splitter proportions
+        main_splitter.setStretchFactor(0, 2)  # Left panel
+        main_splitter.setStretchFactor(1, 3)  # Center panel (larger)
+        main_splitter.setStretchFactor(2, 1)  # Right panel
+        
+        self.setCentralWidget(main_splitter)
+        
+    def create_left_panel(self) -> QWidget:
+        """Create the left panel with tree view"""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Header
+        header = QLabel("📁 Navegação")
+        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #007acc; margin-bottom: 10px;")
+        layout.addWidget(header)
+        
+        # Tree widget
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Categoria / Dorsal / Nome"])
+        self.tree.currentItemChanged.connect(self.on_item_selected)
+        layout.addWidget(self.tree)
+        
+        return panel
+        
+    def create_center_panel(self) -> QWidget:
+        """Create the center panel with image displays"""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setSpacing(15)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Header
+        header = QLabel("🖼️ Visualização de Imagens")
+        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #007acc; margin-bottom: 10px;")
+        layout.addWidget(header)
+        
+        # Original image thumbnail
+        thumb_group = QGroupBox("Imagem Original")
+        thumb_layout = QVBoxLayout(thumb_group)
+        self.thumb_label = QLabel()
+        self.thumb_label.setAlignment(Qt.AlignCenter)
+        self.thumb_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 20px; background-color: #f8f9fa;")
+        self.thumb_label.setMinimumHeight(200)
+        thumb_layout.addWidget(self.thumb_label)
+        layout.addWidget(thumb_group)
+        
+        # Runner and shoes section
+        runner_group = QGroupBox("Corredor e Tênis")
+        runner_layout = QHBoxLayout(runner_group)
+        
+        # Runner image
+        runner_container = QVBoxLayout()
+        runner_label_header = QLabel("👤 Corredor")
+        runner_label_header.setStyleSheet("font-weight: bold; color: #666; margin-bottom: 5px;")
+        runner_container.addWidget(runner_label_header)
+        
+        self.runner_label = QLabel()
+        self.runner_label.setAlignment(Qt.AlignCenter)
+        self.runner_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 10px; background-color: #f8f9fa;")
+        self.runner_label.setMinimumHeight(300)
+        runner_container.addWidget(self.runner_label)
+        
+        # Shoes section
+        shoes_container = QVBoxLayout()
+        shoes_label_header = QLabel("👟 Tênis")
+        shoes_label_header.setStyleSheet("font-weight: bold; color: #666; margin-bottom: 5px;")
+        shoes_container.addWidget(shoes_label_header)
+        
+        shoes_scroll = QScrollArea()
+        shoes_scroll.setWidgetResizable(True)
+        shoes_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        shoes_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        self.shoe_container = QWidget()
+        self.shoe_box = QVBoxLayout(self.shoe_container)
+        self.shoe_box.setSpacing(10)
+        shoes_scroll.setWidget(self.shoe_container)
+        shoes_scroll.setMaximumWidth(150)
+        shoes_container.addWidget(shoes_scroll)
+        
+        runner_layout.addLayout(runner_container, 2)
+        runner_layout.addLayout(shoes_container, 1)
+        layout.addWidget(runner_group)
+        
+        return panel
+        
+    def create_right_panel(self) -> QWidget:
+        """Create the right panel with details and controls"""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setSpacing(15)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Header
+        header = QLabel("⚙️ Detalhes e Edição")
+        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #007acc; margin-bottom: 10px;")
+        layout.addWidget(header)
+        
+        # Bib information group
+        bib_group = QGroupBox("Informações do Dorsal")
+        bib_layout = QVBoxLayout(bib_group)
+        
+        # Bib number
+        bib_layout.addWidget(QLabel("Número do Dorsal:"))
+        self.bib_number = QLineEdit()
+        self.bib_number.setPlaceholderText("Digite o número...")
+        bib_layout.addWidget(self.bib_number)
+        
+        # Bib category
+        bib_layout.addWidget(QLabel("Categoria:"))
+        self.bib_category = QComboBox()
+        bib_layout.addWidget(self.bib_category)
+        
+        layout.addWidget(bib_group)
+        
+        # Brand selection group
+        brand_group = QGroupBox("Marcas dos Tênis")
+        brand_layout = QVBoxLayout(brand_group)
+        
+        # Create scrollable area for brands
+        brand_scroll = QScrollArea()
+        brand_scroll.setWidgetResizable(True)
+        brand_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        self.brand_panel = QWidget()
+        self.brand_layout = QVBoxLayout(self.brand_panel)
+        self.brand_layout.setSpacing(5)
+        self.brand_checks: List[QCheckBox] = []
+        
+        brand_scroll.setWidget(self.brand_panel)
+        brand_layout.addWidget(brand_scroll)
+        layout.addWidget(brand_group)
+        
+        # Action buttons
+        button_group = QGroupBox("Ações")
+        button_layout = QVBoxLayout(button_group)
+        
+        save_btn = QPushButton("💾 Salvar Alterações")
+        save_btn.clicked.connect(self.apply_changes)
+        button_layout.addWidget(save_btn)
+        
+        layout.addWidget(button_group)
+        
+        # Add stretch to push everything to top
+        layout.addStretch()
+        
+        return panel
 
     # Utility ---------------------------------------------------------------
     def select_base_path(self) -> None:
@@ -137,7 +375,7 @@ class RunnerViewer(QMainWindow):
             return
         self.json_path = path
         with open(path, "r", encoding="utf-8") as f:
-            self.data = json.load(f)
+            self.data = json.load(f)[0:1000]  # Limit to 1000 entries for performance
         self.collect_stats()
         self.populate_tree()
         self.show_entry(0)
@@ -163,7 +401,7 @@ class RunnerViewer(QMainWindow):
         for chk in self.brand_checks:
             chk.deleteLater()
         self.brand_checks = []
-        self.brand_layout.addStretch()  # ensure layout not empty
+        
         for b in self.brands:
             cb = QCheckBox(b)
             self.brand_layout.addWidget(cb)
@@ -173,7 +411,7 @@ class RunnerViewer(QMainWindow):
         self.tree.clear()
         cats = {}
         for idx, item in enumerate(self.data):
-            cat = item.get("category", "?")
+            cat = item.get("bib", {}).get("category", "?")
             bib_num = item.get("bib", {}).get("number", "?")
             cat_node = cats.get(cat)
             if not cat_node:
@@ -182,11 +420,12 @@ class RunnerViewer(QMainWindow):
             bib_node = None
             # search if bib child exists
             for i in range(cat_node.childCount()):
-                if cat_node.child(i).text(0) == bib_num:
-                    bib_node = cat_node.child(i)
+                child = cat_node.child(i)
+                if child and child.text(0) == str(bib_num):
+                    bib_node = child
                     break
             if bib_node is None:
-                bib_node = QTreeWidgetItem(cat_node, [bib_num])
+                bib_node = QTreeWidgetItem(cat_node, [str(bib_num)])
             img_node = QTreeWidgetItem(bib_node, [item.get("filename", str(idx))])
             img_node.setData(0, Qt.UserRole, idx)
         self.tree.expandAll()
@@ -200,51 +439,105 @@ class RunnerViewer(QMainWindow):
             return
         index = max(0, min(index, len(self.data)-1))
         self.current_index = index
-        item = self.data[index]
-        img_path = os.path.join(self.config.get("base_path", ""), item["filename"])
+        data_item = self.data[index]
+        img_path = os.path.join(self.config.get("base_path", ""), data_item["filename"])
         try:
             img = Image.open(img_path)
         except Exception:
             self.thumb_label.setText("Imagem não encontrada")
             return
+        
         # Thumb of original
-        thumb = ImageQt.ImageQt(img.resize((200, int(200*img.height/img.width))))
-        self.thumb_label.setPixmap(QPixmap.fromImage(thumb))
+        thumb_img = img.resize((150, int(150*img.height/img.width)))
+        thumb_pixmap = self.pil_to_qpixmap(thumb_img)
+        self.thumb_label.setPixmap(thumb_pixmap)
+        
         # Runner crop
-        bbox = item.get("bbox", [0, 0, img.width, img.height])
+        bbox = data_item.get("bbox", [0, 0, img.width, img.height])
         runner = self.crop_image(img, bbox)
-        rimg = ImageQt.ImageQt(runner.resize((300, int(300*runner.height/runner.width))))
-        self.runner_label.setPixmap(QPixmap.fromImage(rimg))
+        # Calculate proportional resize to fit within a 300x400 box
+        target_width, target_height = 300, 400
+        width_ratio = target_width / runner.width
+        height_ratio = target_height / runner.height
+        # Use the smaller ratio to ensure image fits in both dimensions
+        scale_ratio = min(width_ratio, height_ratio)
+        runner_img = runner.resize((int(runner.width * scale_ratio), int(runner.height * scale_ratio)))
+        runner_pixmap = self.pil_to_qpixmap(runner_img)
+        self.runner_label.setPixmap(runner_pixmap)
 
         # shoes
         for i in reversed(range(self.shoe_box.count())):
-            w = self.shoe_box.itemAt(i).widget()
-            if w:
-                w.deleteLater()
-        for shoe in item.get("shoes", []):
-            sbbox = shoe.get("bbox")
-            if sbbox:
-                crop = self.crop_image(img, sbbox)
-                simg = ImageQt.ImageQt(crop.resize((120, int(120*crop.height/crop.width))))
-                lbl = QLabel()
-                lbl.setPixmap(QPixmap.fromImage(simg))
-                self.shoe_box.addWidget(lbl)
+            layout_item = self.shoe_box.itemAt(i)
+            if layout_item:
+                w = layout_item.widget()
+                if w:
+                    w.deleteLater()
+        
+        for shoe in data_item.get("shoes", []):
+            shoe_bbox = shoe.get("bbox")
+            if shoe_bbox and len(shoe_bbox) >= 4:
+                x1, y1, x2, y2 = shoe_bbox
+                runner_bbox = data_item.get("bbox", [0, 0, img.width, img.height])
+                if len(runner_bbox) >= 4:
+                    x1 = runner_bbox[0] + x1
+                    y1 = runner_bbox[1] + y1
+                    x2 = runner_bbox[0] + x2
+                    y2 = runner_bbox[1] + y2
+                    sbbox = [x1, y1, x2, y2]
+                    try:
+                        crop = self.crop_image(img, sbbox)
+                        shoe_img = crop.resize((120, int(120*crop.height/crop.width)))
+                        shoe_pixmap = self.pil_to_qpixmap(shoe_img)
+                        
+                        # Create a container for each shoe with label
+                        shoe_widget = QWidget()
+                        shoe_layout = QVBoxLayout(shoe_widget)
+                        shoe_layout.setContentsMargins(5, 5, 5, 5)
+                        
+                        lbl = QLabel()
+                        lbl.setPixmap(shoe_pixmap)
+                        lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px;")
+                        
+                        # Add brand label if available
+                        brand = shoe.get("new_label") or shoe.get("label", "")
+                        if brand:
+                            brand_lbl = QLabel(brand)
+                            brand_lbl.setStyleSheet("font-size: 11px; color: #666; font-weight: bold;")
+                            brand_lbl.setAlignment(Qt.AlignCenter)
+                            shoe_layout.addWidget(brand_lbl)
+                        
+                        shoe_layout.addWidget(lbl)
+                        self.shoe_box.addWidget(shoe_widget)
+                    except Exception as e:
+                        print(f"Error processing shoe image: {e}")
+        
         self.shoe_box.addStretch()
 
         # right panel data
-        self.full_image.setPixmap(QPixmap.fromImage(rimg))
-        self.bib_number.setText(str(item.get("bib", {}).get("number", "")))
-        cat = item.get("bib", {}).get("category")
+        self.bib_number.setText(str(data_item.get("bib", {}).get("number", "")))
+        cat = data_item.get("bib", {}).get("category")
         if cat and cat in self.bib_categories:
             self.bib_category.setCurrentText(cat)
         else:
             self.bib_category.setCurrentIndex(-1)
         for chk in self.brand_checks:
             chk.setChecked(False)
-        brands_present = {shoe.get("new_label") or shoe.get("label") for shoe in item.get("shoes", [])}
+        brands_present = {shoe.get("new_label") or shoe.get("label") for shoe in data_item.get("shoes", [])}
         for chk in self.brand_checks:
             if chk.text() in brands_present:
                 chk.setChecked(True)
+
+    def pil_to_qpixmap(self, pil_image):
+        """Convert PIL Image to QPixmap"""
+        # Convert PIL image to bytes
+        byte_array = io.BytesIO()
+        pil_image.save(byte_array, format='PNG')
+        byte_array.seek(0)
+        
+        # Load QPixmap from bytes
+        pixmap = QPixmap()
+        pixmap.loadFromData(byte_array.getvalue())
+        return pixmap
 
     def apply_changes(self) -> None:
         if not self.data:
@@ -282,7 +575,7 @@ class RunnerViewer(QMainWindow):
             self.show_entry(idx)
 
     # navigation and editing -----------------------------------------------
-    def keyPressEvent(self, event):
+    def keyPressEvent(self, event: QKeyEvent):
         if not self.data:
             return
         if event.key() == Qt.Key_Delete:

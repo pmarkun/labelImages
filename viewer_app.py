@@ -43,7 +43,10 @@ from PyQt5.QtWidgets import (
     QPushButton,
 )
 
-DEFAULT_VIEWER_CONFIG = {"base_path": os.getcwd()}
+DEFAULT_VIEWER_CONFIG = {
+    "base_path": os.getcwd(),
+    "labels": []
+}
 
 
 def load_config(path: str) -> dict:
@@ -296,13 +299,15 @@ class RunnerViewer(QMainWindow):
         shoes_scroll = QScrollArea()
         shoes_scroll.setWidgetResizable(True)
         shoes_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        shoes_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        shoes_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
         self.shoe_container = QWidget()
         self.shoe_box = QVBoxLayout(self.shoe_container)
-        self.shoe_box.setSpacing(10)
+        self.shoe_box.setSpacing(5)  # Reduce spacing to allow more room for shoes
+        self.shoe_box.setContentsMargins(5, 5, 5, 5)  # Smaller margins
         shoes_scroll.setWidget(self.shoe_container)
         shoes_scroll.setMaximumWidth(300)
+        shoes_scroll.setMinimumHeight(400)  # Ensure minimum height
         shoes_container.addWidget(shoes_scroll)
         
         runner_layout.addLayout(thumb_layout, 1)
@@ -332,11 +337,13 @@ class RunnerViewer(QMainWindow):
         bib_layout.addWidget(QLabel("Número do Dorsal:"))
         self.bib_number = QLineEdit()
         self.bib_number.setPlaceholderText("Digite o número...")
+        self.bib_number.returnPressed.connect(self.on_bib_number_enter)
         bib_layout.addWidget(self.bib_number)
         
         # Bib category
         bib_layout.addWidget(QLabel("Categoria:"))
         self.bib_category = QComboBox()
+        self.bib_category.activated.connect(self.on_category_selected)
         bib_layout.addWidget(self.bib_category)
         
         layout.addWidget(bib_group)
@@ -365,7 +372,20 @@ class RunnerViewer(QMainWindow):
         shortcuts_group = QGroupBox("Atalhos de Teclado")
         shortcuts_layout = QVBoxLayout(shortcuts_group)
         
-        shortcuts_text = QLabel("""
+        # Dynamic shortcuts text based on config
+        brand_shortcuts = ""
+        config_labels = self.config.get("labels", [])
+        if config_labels:
+            brand_shortcuts = "<b>Marcas:</b><br>"
+            for label_config in config_labels:
+                if isinstance(label_config, dict):
+                    key = label_config.get("key", "").upper()
+                    label = label_config.get("label", "")
+                    if key and label:
+                        brand_shortcuts += f"<b>{key}</b> : {label}<br>"
+            brand_shortcuts += "<br>"
+        
+        shortcuts_text = QLabel(f"""
         <b>Navegação:</b><br>
         ← → ↑ ↓ : Navegar<br>
         Enter : Salvar mudanças<br><br>
@@ -376,6 +396,7 @@ class RunnerViewer(QMainWindow):
         <b>C</b> : Marcar/desmarcar como checada<br>
         <b>Ctrl+Z</b> : Desfazer última alteração<br><br>
         
+        {brand_shortcuts}
         <small>💡 Imagens checadas ficam protegidas contra edição</small>
         """)
         shortcuts_text.setStyleSheet("font-size: 11px; color: #666; padding: 5px;")
@@ -418,7 +439,16 @@ class RunnerViewer(QMainWindow):
         self.update_window_title()
 
     def collect_stats(self) -> None:
+        # Get brands from config first, then add any additional ones found in data
+        config_labels = self.config.get("labels", [])
         brands = set()
+        
+        # Add brands from config
+        for label_config in config_labels:
+            if isinstance(label_config, dict) and "label" in label_config:
+                brands.add(label_config["label"])
+        
+        # Add any additional brands found in the data
         cats = set()
         for item in self.data:
             for shoe in item.get("shoes", []):
@@ -429,15 +459,9 @@ class RunnerViewer(QMainWindow):
             
             # Support both old and new format for categories
             bib_cat = None
-            bib_data = item.get("bib", {})
-            if isinstance(bib_data, dict):
-                # New format: check extracted_data first
-                extracted = bib_data.get("extracted_data", {})
-                if isinstance(extracted, dict):
-                    bib_cat = extracted.get("category")
-                # Fallback to old format
-                if not bib_cat:
-                    bib_cat = bib_data.get("category")
+            run_data = item.get("run_data", {})
+            if isinstance(run_data, dict):
+                bib_cat = run_data.get("run_category")
             
             if bib_cat and bib_cat != "Not Identifiable":
                 cats.add(bib_cat)
@@ -456,6 +480,7 @@ class RunnerViewer(QMainWindow):
         # Organiza as marcas em duas colunas
         for i, b in enumerate(self.brands):
             cb = QCheckBox(b)
+            cb.stateChanged.connect(self.on_brand_changed_immediate)
             row = i // 2  # Linha
             col = i % 2   # Coluna (0 ou 1)
             self.brand_layout.addWidget(cb, row, col)
@@ -465,30 +490,18 @@ class RunnerViewer(QMainWindow):
         self.tree.clear()
         cats = {}
         for idx, item in enumerate(self.data):
-            # Support both old and new format for category
+            # Get category from run_data
             cat = "?"
-            bib_data = item.get("bib", {})
-            if isinstance(bib_data, dict):
-                # New format: check extracted_data first
-                extracted = bib_data.get("extracted_data", {})
-                if isinstance(extracted, dict):
-                    cat = extracted.get("category", "?")
-                    if cat == "Not Identifiable":
-                        cat = "?"
-                # Fallback to old format
-                if cat == "?":
-                    cat = bib_data.get("category", "?")
+            run_data = item.get("run_data", {})
+            if isinstance(run_data, dict):
+                cat = run_data.get("run_category", "?")
+                if cat == "Not Identifiable":
+                    cat = "?"
             
-            # Support both old and new format for bib number
+            # Get bib number from run_data
             bib_num = "?"
-            if isinstance(bib_data, dict):
-                # New format: check extracted_data first
-                extracted = bib_data.get("extracted_data", {})
-                if isinstance(extracted, dict):
-                    bib_num = extracted.get("number")
-                # Fallback to old format
-                if not bib_num:
-                    bib_num = bib_data.get("number", "?")
+            if isinstance(run_data, dict):
+                bib_num = run_data.get("bib_number", "?")
             
             is_checked = item.get("checked", False)
             
@@ -576,33 +589,60 @@ class RunnerViewer(QMainWindow):
                 if w:
                     w.deleteLater()
         
-        for shoe in data_item.get("shoes", []):
+        shoes = data_item.get("shoes", [])
+        num_shoes = len(shoes)
+        
+        # Get the actual available height from the scroll area parent
+        # Use a more conservative and reliable approach
+        container_height = 500  # Good default height for shoe display
+        container_width = 270   # Fixed width based on scroll area max width
+        
+        # Set the container to use the full available height immediately
+        self.shoe_container.setMinimumHeight(container_height)
+        self.shoe_container.setMaximumHeight(container_height)
+        
+        # Calculate available space for each shoe
+        if num_shoes > 0:
+            # Reserve space for brand labels and margins (more conservative)
+            label_height = 20  # Height for brand label
+            widget_margins = 10  # Margins per shoe widget
+            layout_spacing = self.shoe_box.spacing() * max(0, num_shoes - 1)  # Spacing between shoes
+            total_reserved_height = num_shoes * (label_height + widget_margins) + layout_spacing + 30  # Extra margin
+            
+            # Calculate available height per shoe image
+            available_height_per_shoe = max((container_height - total_reserved_height) / num_shoes, 40)
+            available_width = container_width - 20  # Leave some margin
+        else:
+            available_height_per_shoe = 100
+            available_width = 250
+            
+        for shoe in shoes:
             shoe_bbox = shoe.get("bbox")
             if shoe_bbox and len(shoe_bbox) >= 4:
                 try:
                     crop = self.crop_image(img, shoe_bbox)
-                    # define width and height based on the container size
-                    num_shoes = len(data_item.get("shoes", []))
-                    shoe_height = self.shoe_container.height() / num_shoes * 0.95
-                    shoe_width = self.shoe_container.width() * 0.85
-                    #number of shoes
-                    shoe_height_ratio = shoe_height / crop.height
-                    shoe_width_ratio = shoe_width / crop.width
-                    if crop.width > shoe_width:
-                        shoe_ratio = shoe_width_ratio
-                    else:
-                        shoe_ratio = shoe_height_ratio
-                    shoe_img = crop.resize((int(crop.width * shoe_ratio), int(crop.height * shoe_ratio)))
+                    
+                    # Calculate scaling to fit available space
+                    height_ratio = available_height_per_shoe / crop.height if crop.height > 0 else 1
+                    width_ratio = available_width / crop.width if crop.width > 0 else 1
+                    
+                    # Use the smaller ratio to maintain aspect ratio
+                    shoe_ratio = min(height_ratio, width_ratio, 2.0)  # Allow up to 2x scaling
+                    
+                    # Ensure reasonable size bounds
+                    shoe_ratio = max(shoe_ratio, 0.2)  # Minimum scale
+                    shoe_ratio = min(shoe_ratio, 3.0)  # Maximum scale
+                    
+                    new_width = max(int(crop.width * shoe_ratio), 60)
+                    new_height = max(int(crop.height * shoe_ratio), 40)
+                    
+                    shoe_img = crop.resize((new_width, new_height))
                     shoe_pixmap = self.pil_to_qpixmap(shoe_img)
                     
                     # Create a container for each shoe with label
                     shoe_widget = QWidget()
                     shoe_layout = QVBoxLayout(shoe_widget)
                     shoe_layout.setContentsMargins(5, 5, 5, 5)
-                    
-                    lbl = QLabel()
-                    lbl.setPixmap(shoe_pixmap)
-                    lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px;")
                     
                     # Add brand label if available - support both old and new format
                     brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
@@ -612,33 +652,59 @@ class RunnerViewer(QMainWindow):
                         brand_lbl.setAlignment(Qt.AlignCenter)
                         shoe_layout.addWidget(brand_lbl)
                     
+                    lbl = QLabel()
+                    lbl.setPixmap(shoe_pixmap)
+                    lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px;")
+                    lbl.setAlignment(Qt.AlignCenter)
+                    
                     shoe_layout.addWidget(lbl)
+                    
+                    # Add stretch to center the image in its allocated space
+                    shoe_layout.addStretch()
+                    
+                    # Set the widget to expand and fill allocated space
+                    from PyQt5.QtWidgets import QSizePolicy
+                    shoe_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+                    
                     self.shoe_box.addWidget(shoe_widget)
                 except Exception as e:
                     print(f"Error processing shoe image: {e}")
     
-        self.shoe_box.addStretch()
+        # Don't add stretch - we want shoes to fill the available space
+        # self.shoe_box.addStretch()
+        
+        # Adjust container size to fit all shoes properly
+        # self.adjust_shoe_container_size()
 
         # right panel data - desabilita se checado
-        # Support both old and new format for bib number
-        bib_data = data_item.get("bib", {})
+        # Get bib number from run_data
+        run_data = data_item.get("run_data", {})
         bib_number = ""
-        if isinstance(bib_data, dict):
-            # New format: check extracted_data first
-            extracted = bib_data.get("extracted_data", {})
-            if isinstance(extracted, dict):
-                bib_number = str(extracted.get("number", ""))
+        if isinstance(run_data, dict):
+            bib_number = str(run_data.get("bib_number", ""))
+        
+        # Temporarily disconnect signals to prevent triggering change handlers
+        try:
+            self.bib_number.returnPressed.disconnect()
+        except:
+            pass
+        try:
+            self.bib_category.activated.disconnect()
+        except:
+            pass
+        for chk in self.brand_checks:
+            try:
+                chk.stateChanged.disconnect()
+            except:
+                pass
         
         self.bib_number.setText(bib_number)
         self.bib_number.setEnabled(not is_checked)
         
-        # Support both old and new format for category
+        # Get category from run_data
         cat = ""
-        run_data = data_item.get("run_data", {})
         if isinstance(run_data, dict):
             cat = run_data.get("run_category", "")
-        if not cat and isinstance(bib_data, dict):
-            cat = bib_data.get("extracted_data", {}).get("category", "")
         if cat and cat in self.bib_categories:
             self.bib_category.setCurrentText(cat)
         else:
@@ -659,6 +725,12 @@ class RunnerViewer(QMainWindow):
         for chk in self.brand_checks:
             if chk.text() in brands_present:
                 chk.setChecked(True)
+        
+        # Reconnect signals
+        self.bib_number.returnPressed.connect(self.on_bib_number_enter)
+        self.bib_category.activated.connect(self.on_category_selected)
+        for chk in self.brand_checks:
+            chk.stateChanged.connect(self.on_brand_changed_immediate)
 
         # Atualiza status bar
         self.update_status_bar()
@@ -675,43 +747,55 @@ class RunnerViewer(QMainWindow):
         pixmap.loadFromData(byte_array.getvalue())
         return pixmap
 
-    def apply_changes(self) -> None:
+    def apply_changes(self, save_state: bool = True) -> None:
         if not self.data:
             return
         
-        # Salva estado para undo antes de fazer mudanças
-        self.save_state()
+        # Salva estado para undo antes de fazer mudanças (opcional)
+        if save_state:
+            self.save_state()
         
         item = self.data[self.current_index]
         
-        # Handle bib data - support both old and new format
-        bib_data = item.setdefault("bib", {})
+        # Handle run_data - always use run_data for bib number and category
+        run_data = item.setdefault("run_data", {})
         
-        # For new format, we need to update extracted_data
-        if "extracted_data" in bib_data:
-            extracted_data = bib_data.setdefault("extracted_data", {})
-            extracted_data["number"] = self.bib_number.text()
-            cat = self.bib_category.currentText()
-            if cat:
-                extracted_data["category"] = cat
-        else:
-            # Old format - direct assignment
-            bib_data["number"] = self.bib_number.text()
-            cat = self.bib_category.currentText()
-            if cat:
-                bib_data["category"] = cat
+        # Update bib number and category in run_data
+        run_data["bib_number"] = self.bib_number.text()
+        cat = self.bib_category.currentText()
+        if cat:
+            run_data["run_category"] = cat
         
-        # Handle shoes brands
+        # Handle shoes brands - update all shoes with selected brands
         checked_brands = [chk.text() for chk in self.brand_checks if chk.isChecked()]
         shoes = item.get("shoes", [])
         
-        for idx, brand in enumerate(checked_brands):
-            if idx < len(shoes):
-                # For new format, update classification_label; for old format, update new_label
-                if "classification_label" in shoes[idx]:
-                    shoes[idx]["classification_label"] = brand
+        # Clear all existing brands first
+        for shoe in shoes:
+            if "classification_label" in shoe:
+                shoe["classification_label"] = ""
+            elif "new_label" in shoe:
+                shoe["new_label"] = ""
+            elif "label" in shoe:
+                shoe["label"] = ""
+        
+        # Apply selected brands to shoes (distribute evenly if multiple brands selected)
+        if checked_brands and shoes:
+            for idx, shoe in enumerate(shoes):
+                # If only one brand selected, apply to all shoes
+                if len(checked_brands) == 1:
+                    brand = checked_brands[0]
                 else:
-                    shoes[idx]["new_label"] = brand
+                    # If multiple brands, cycle through them
+                    brand = checked_brands[idx % len(checked_brands)]
+                
+                # Apply to the appropriate field based on what exists
+                if "classification_label" in shoe:
+                    shoe["classification_label"] = brand
+                elif "new_label" in shoe:
+                    shoe["new_label"] = brand
+                else:
+                    shoe["new_label"] = brand
         
         self.data[self.current_index] = item
         self.mark_unsaved_changes()
@@ -818,22 +902,32 @@ class RunnerViewer(QMainWindow):
         self.save_state()
         
         current_item = self.data[self.current_index]
-        bib_number = current_item.get("bib", {}).get("number")
+        
+        # Get bib number from run_data
+        bib_number = ""
+        run_data = current_item.get("run_data", {})
+        if isinstance(run_data, dict):
+            bib_number = str(run_data.get("bib_number", ""))
         
         # Remove a imagem
         self.data.pop(self.current_index)
         
-        # Se não há mais imagens com o mesmo número de dorsal, remove o número também
-        if bib_number:
-            has_same_bib = any(item.get("bib", {}).get("number") == bib_number for item in self.data)
-            if not has_same_bib:
-                # Aqui você pode adicionar lógica adicional se necessário
-                pass
+        # Adjust current_index to select previous image (or keep same position if at beginning)
+        if self.current_index > 0:
+            self.current_index -= 1
+        elif len(self.data) > 0:
+            # If we were at index 0, stay at 0 (which now has the next image)
+            self.current_index = 0
+        else:
+            # No more images
+            self.current_index = -1
         
         self.populate_tree()
-        new_index = min(self.current_index, len(self.data)-1)
-        if new_index >= 0:
-            self.show_entry(new_index)
+        if self.current_index >= 0 and self.current_index < len(self.data):
+            self.show_entry(self.current_index)
+            # Update tree selection to match current index
+            self.select_tree_item_by_index(self.current_index)
+        
         self.mark_unsaved_changes()
         self.update_status_bar()
 
@@ -848,31 +942,38 @@ class RunnerViewer(QMainWindow):
         # Remove todas as imagens com o mesmo número de dorsal
         indices_to_remove = []
         for i, item in enumerate(self.data):
-            # Support both old and new format for bib number
+            # Get bib number from run_data
             item_bib_number = ""
-            bib_data = item.get("bib", {})
-            if isinstance(bib_data, dict):
-                # New format: check extracted_data first
-                extracted = bib_data.get("extracted_data", {})
-                if isinstance(extracted, dict):
-                    item_bib_number = str(extracted.get("number", ""))
-                # Fallback to old format
-                if not item_bib_number:
-                    item_bib_number = str(bib_data.get("number", ""))
+            run_data = item.get("run_data", {})
+            if isinstance(run_data, dict):
+                item_bib_number = str(run_data.get("bib_number", ""))
             
             if item_bib_number == str(bib_number):
                 indices_to_remove.append(i)
         
+        if not indices_to_remove:
+            return
+        
+        # Find the best new index (prefer previous image before the first removed one)
+        first_removed_index = min(indices_to_remove)
+        new_index = first_removed_index - 1 if first_removed_index > 0 else 0
+        
         # Remove em ordem reversa para não afetar os índices
         for i in reversed(indices_to_remove):
             self.data.pop(i)
-            if i <= self.current_index and self.current_index > 0:
-                self.current_index -= 1
+            # Adjust new_index if needed
+            if i <= new_index:
+                new_index = max(0, new_index - 1)
+        
+        # Update current index
+        self.current_index = min(new_index, len(self.data) - 1) if self.data else -1
         
         self.populate_tree()
-        new_index = min(self.current_index, len(self.data)-1)
-        if new_index >= 0:
-            self.show_entry(new_index)
+        if self.current_index >= 0:
+            self.show_entry(self.current_index)
+            # Update tree selection to match current index
+            self.select_tree_item_by_index(self.current_index)
+        
         self.mark_unsaved_changes()
         self.update_status_bar()
 
@@ -886,17 +987,11 @@ class RunnerViewer(QMainWindow):
         
         current_item = self.data[self.current_index]
         
-        # Support both old and new format for bib number
+        # Get bib number from run_data
         bib_number = ""
-        bib_data = current_item.get("bib", {})
-        if isinstance(bib_data, dict):
-            # New format: check extracted_data first
-            extracted = bib_data.get("extracted_data", {})
-            if isinstance(extracted, dict):
-                bib_number = str(extracted.get("number", ""))
-            # Fallback to old format
-            if not bib_number:
-                bib_number = str(bib_data.get("number", ""))
+        run_data = current_item.get("run_data", {})
+        if isinstance(run_data, dict):
+            bib_number = str(run_data.get("bib_number", ""))
         
         if not bib_number:
             return
@@ -905,17 +1000,11 @@ class RunnerViewer(QMainWindow):
         indices_to_remove = []
         for i, item in enumerate(self.data):
             if i != self.current_index:
-                # Support both old and new format for bib number
+                # Get bib number from run_data
                 item_bib_number = ""
-                item_bib_data = item.get("bib", {})
-                if isinstance(item_bib_data, dict):
-                    # New format: check extracted_data first
-                    extracted = item_bib_data.get("extracted_data", {})
-                    if isinstance(extracted, dict):
-                        item_bib_number = str(extracted.get("number", ""))
-                    # Fallback to old format
-                    if not item_bib_number:
-                        item_bib_number = str(item_bib_data.get("number", ""))
+                item_run_data = item.get("run_data", {})
+                if isinstance(item_run_data, dict):
+                    item_bib_number = str(item_run_data.get("bib_number", ""))
                 
                 if item_bib_number == bib_number:
                     indices_to_remove.append(i)
@@ -961,6 +1050,14 @@ class RunnerViewer(QMainWindow):
             # Intercepta nossos shortcuts antes da tree widget processar
             key = event.key()
             modifiers = event.modifiers()
+            key_text = event.text().lower()
+            
+            # Verifica se é um atalho de marca
+            key_to_brand = self.get_key_to_brand_mapping()
+            if key_text in key_to_brand:
+                # Processa o atalho da marca no contexto da janela principal
+                self.keyPressEvent(event)
+                return True  # Bloqueia o evento para a tree widget
             
             # Nossos shortcuts personalizados
             if key == Qt.Key_C or key == Qt.Key_K or key == Qt.Key_Delete or \
@@ -987,6 +1084,18 @@ class RunnerViewer(QMainWindow):
         # Ctrl+Z para undo
         if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Z:
             self.undo()
+            return
+        
+        # Verifica se é um atalho de marca primeiro
+        key_text = event.text().lower()
+        key_to_brand = self.get_key_to_brand_mapping()
+        if key_text in key_to_brand:
+            # Verifica se a imagem atual está checada (trava operações)
+            is_checked = self.is_current_checked()
+            if is_checked:
+                QMessageBox.information(self, "Imagem Checada", f"Esta imagem está checada e não pode ser editada. Pressione 'C' para deschequear primeiro.")
+                return
+            self.set_brand_by_key(key_text)
             return
             
         # Verifica se a imagem atual está checada (trava operações destrutivas)
@@ -1063,6 +1172,220 @@ class RunnerViewer(QMainWindow):
         else:
             event.accept()
 
+    def select_tree_item_by_index(self, data_index: int) -> None:
+        """Selects the tree item that corresponds to the given data index"""
+        if data_index < 0 or data_index >= len(self.data):
+            return
+            
+        def find_item_with_index(item: QTreeWidgetItem, target_index: int) -> QTreeWidgetItem:
+            """Recursively search for tree item with specific data index"""
+            # Check if this item has the target index
+            item_index = item.data(0, Qt.UserRole)
+            if item_index == target_index:
+                return item
+            
+            # Search children
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if child:
+                    result = find_item_with_index(child, target_index)
+                    if result:
+                        return result
+            return None
+        
+        # Search through all top-level items
+        for i in range(self.tree.topLevelItemCount()):
+            top_item = self.tree.topLevelItem(i)
+            if top_item:
+                result = find_item_with_index(top_item, data_index)
+                if result:
+                    self.tree.setCurrentItem(result)
+                    return
+
+    def set_brand_by_key(self, key_char: str) -> None:
+        """Define a marca baseada na tecla pressionada conforme configuração"""
+        if not self.data:
+            return
+        
+        # Encontra a label correspondente à tecla
+        config_labels = self.config.get("labels", [])
+        target_brand = None
+        
+        for label_config in config_labels:
+            if isinstance(label_config, dict) and label_config.get("key") == key_char.lower():
+                target_brand = label_config.get("label")
+                break
+        
+        if not target_brand:
+            return
+        
+        # Salva estado para undo
+        self.save_state()
+        
+        # Desmarca todas as marcas
+        for chk in self.brand_checks:
+            chk.setChecked(False)
+        
+        # Marca apenas a marca selecionada
+        for chk in self.brand_checks:
+            if chk.text() == target_brand:
+                chk.setChecked(True)
+                break
+        
+        # Aplica as mudanças automaticamente (sem salvar estado novamente)
+        self.apply_changes(save_state=False)
+        
+        # Marca a imagem como checada após aplicar as mudanças
+        current_item = self.data[self.current_index]
+        current_item['checked'] = True
+        
+        # Atualiza a visualização para mostrar o status checado
+        self.show_entry(self.current_index)
+        
+        # Atualiza a tree para mostrar o ícone de checado
+        self.populate_tree()
+        self.select_tree_item_by_index(self.current_index)
+        
+        self.mark_unsaved_changes()
+        self.update_status_bar()
+
+    def get_key_to_brand_mapping(self) -> dict:
+        """Retorna um dicionário mapeando teclas para marcas"""
+        config_labels = self.config.get("labels", [])
+        mapping = {}
+        
+        for label_config in config_labels:
+            if isinstance(label_config, dict):
+                key = label_config.get("key", "").lower()
+                label = label_config.get("label")
+                if key and label:
+                    mapping[key] = label
+        
+        return mapping
+
+    # Change handlers ----------------------------------------
+    def on_bib_number_enter(self) -> None:
+        """Handle Enter key press in bib number field"""
+        if not self.data or self.current_index >= len(self.data):
+            return
+        
+        # Skip if image is checked (locked)
+        if self.is_current_checked():
+            return
+        
+        text = self.bib_number.text()
+        item = self.data[self.current_index]
+        
+        # Ensure run_data exists and is a dict
+        run_data = item.setdefault("run_data", {})
+        
+        # Update bib number in run_data
+        run_data["bib_number"] = text
+        
+        self.mark_unsaved_changes()
+        # Update tree to reflect changes
+        self.populate_tree()
+        self.select_tree_item_by_index(self.current_index)
+
+    def on_category_selected(self, index: int) -> None:
+        """Handle category selection from dropdown"""
+        if not self.data or self.current_index >= len(self.data):
+            return
+        
+        # Skip if image is checked (locked)
+        if self.is_current_checked():
+            return
+        
+        text = self.bib_category.currentText()
+        if not text:  # Skip empty selections
+            return
+            
+        item = self.data[self.current_index]
+        
+        # Ensure run_data exists and is a dict
+        run_data = item.setdefault("run_data", {})
+        
+        # Update category in run_data
+        run_data["run_category"] = text
+        
+        self.mark_unsaved_changes()
+        # Update tree to reflect changes
+        self.populate_tree()
+        self.select_tree_item_by_index(self.current_index)
+
+    def on_brand_changed_immediate(self) -> None:
+        """Handle real-time changes to shoe brands (immediate for checkboxes)"""
+        if not self.data or self.current_index >= len(self.data):
+            return
+        
+        # Skip if image is checked (locked)
+        if self.is_current_checked():
+            return
+        
+        item = self.data[self.current_index]
+        
+        # Handle shoes brands - update all shoes with selected brands
+        checked_brands = [chk.text() for chk in self.brand_checks if chk.isChecked()]
+        shoes = item.get("shoes", [])
+        
+        # Clear all existing brands first
+        for shoe in shoes:
+            if "classification_label" in shoe:
+                shoe["classification_label"] = ""
+            elif "new_label" in shoe:
+                shoe["new_label"] = ""
+            elif "label" in shoe:
+                shoe["label"] = ""
+        
+        # Apply selected brands to shoes (distribute evenly if multiple brands selected)
+        if checked_brands and shoes:
+            for idx, shoe in enumerate(shoes):
+                # If only one brand selected, apply to all shoes
+                if len(checked_brands) == 1:
+                    brand = checked_brands[0]
+                else:
+                    # If multiple brands, cycle through them
+                    brand = checked_brands[idx % len(checked_brands)]
+                
+                # Apply to the appropriate field based on what exists
+                if "classification_label" in shoe:
+                    shoe["classification_label"] = brand
+                elif "new_label" in shoe:
+                    shoe["new_label"] = brand
+                else:
+                    shoe["new_label"] = brand
+        
+        self.mark_unsaved_changes()
+        # Refresh the shoe display to show updated brands
+        self.show_entry(self.current_index)
+
+    def adjust_shoe_container_size(self):
+        """Adjust the shoe container size to fit all shoes without scroll bars"""
+        if hasattr(self, 'shoe_container') and self.shoe_container:
+            # Calculate the total height needed for all shoe widgets
+            total_height = 0
+            for i in range(self.shoe_box.count()):
+                item = self.shoe_box.itemAt(i)
+                if item and item.widget():
+                    widget = item.widget()
+                    # Get the size hint or actual size
+                    try:
+                        size_hint = widget.sizeHint()
+                        if size_hint.isValid() and size_hint.height() > 0:
+                            widget_height = size_hint.height()
+                        else:
+                            widget_height = 150  # Default fallback
+                    except:
+                        widget_height = 150  # Default fallback
+                    total_height += widget_height
+            
+            # Add spacing between widgets
+            spacing = self.shoe_box.spacing() * max(0, self.shoe_box.count() - 1)
+            total_height += spacing + 20  # Extra margin
+            
+            # Set the container to the calculated size
+            if total_height > 0:
+                self.shoe_container.setFixedHeight(total_height)
 
 def main() -> None:
     app = QApplication(sys.argv)

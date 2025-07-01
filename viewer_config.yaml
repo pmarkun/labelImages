@@ -1,1 +1,30 @@
 base_path: '/home/markun/devel/storage/olympikus'
+labels:
+- key: q
+  label: Olympikus
+- key: w
+  label: Nike
+- key: e
+  label: Adidas
+- key: r
+  label: Asics
+- key: t
+  label: Fila
+- key: y
+  label: Hoka
+- key: u
+  label: Mizuno
+- key: i
+  label: New Balance
+- key: o
+  label: On Running
+- key: p
+  label: Under Armour
+- key: a
+  label: Puma
+- key: s
+  label: Saucony
+- key: d
+  label: Desconhecido
+- key: z
+  label: Outros

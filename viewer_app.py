@@ -410,7 +410,7 @@ class RunnerViewer(QMainWindow):
             return
         self.json_path = path
         with open(path, "r", encoding="utf-8") as f:
-            self.data = json.load(f)[0:1000]  # Limit to 1000 entries for performance
+            self.data = json.load(f)  # Limit to 1000 entries for performance
         
         # Limpa o stack de undo ao carregar novo arquivo
         self.undo_stack = []
@@ -427,12 +427,26 @@ class RunnerViewer(QMainWindow):
         cats = set()
         for item in self.data:
             for shoe in item.get("shoes", []):
-                brand = shoe.get("new_label") or shoe.get("label")
+                # Support both old and new format
+                brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label")
                 if brand:
                     brands.add(brand)
-            bib_cat = item.get("bib", {}).get("category")
-            if bib_cat:
+            
+            # Support both old and new format for categories
+            bib_cat = None
+            bib_data = item.get("bib", {})
+            if isinstance(bib_data, dict):
+                # New format: check extracted_data first
+                extracted = bib_data.get("extracted_data", {})
+                if isinstance(extracted, dict):
+                    bib_cat = extracted.get("category")
+                # Fallback to old format
+                if not bib_cat:
+                    bib_cat = bib_data.get("category")
+            
+            if bib_cat and bib_cat != "Not Identifiable":
                 cats.add(bib_cat)
+                
         self.brands = sorted(brands)
         self.bib_categories = sorted(cats)
 
@@ -456,8 +470,31 @@ class RunnerViewer(QMainWindow):
         self.tree.clear()
         cats = {}
         for idx, item in enumerate(self.data):
-            cat = item.get("bib", {}).get("category", "?")
-            bib_num = item.get("bib", {}).get("number", "?")
+            # Support both old and new format for category
+            cat = "?"
+            bib_data = item.get("bib", {})
+            if isinstance(bib_data, dict):
+                # New format: check extracted_data first
+                extracted = bib_data.get("extracted_data", {})
+                if isinstance(extracted, dict):
+                    cat = extracted.get("category", "?")
+                    if cat == "Not Identifiable":
+                        cat = "?"
+                # Fallback to old format
+                if cat == "?":
+                    cat = bib_data.get("category", "?")
+            
+            # Support both old and new format for bib number
+            bib_num = "?"
+            if isinstance(bib_data, dict):
+                # New format: check extracted_data first
+                extracted = bib_data.get("extracted_data", {})
+                if isinstance(extracted, dict):
+                    bib_num = extracted.get("number")
+                # Fallback to old format
+                if not bib_num:
+                    bib_num = bib_data.get("number", "?")
+            
             is_checked = item.get("checked", False)
             
             cat_node = cats.get(cat)
@@ -475,7 +512,12 @@ class RunnerViewer(QMainWindow):
                 bib_node = QTreeWidgetItem(cat_node, [str(bib_num)])
             
             # Adiciona ícone para imagens checadas
-            img_name = item.get("filename", str(idx))
+            # Support both old and new format for filename
+            img_name = item.get("filename") or item.get("image_path", str(idx))
+            if img_name != str(idx):
+                # Extract just the filename part if it's a path
+                img_name = os.path.basename(img_name)
+            
             if is_checked:
                 img_name = "✓ " + img_name
             
@@ -497,7 +539,9 @@ class RunnerViewer(QMainWindow):
         # Verifica se está checada
         is_checked = data_item.get('checked', False)
         
-        img_path = os.path.join(self.config.get("base_path", ""), data_item["filename"])
+        # Support both old and new format for filename/image_path
+        img_filename = data_item.get("filename") or data_item.get("image_path", "")
+        img_path = os.path.join(self.config.get("base_path", ""), img_filename)
         try:
             img = Image.open(img_path)
         except Exception:
@@ -516,8 +560,8 @@ class RunnerViewer(QMainWindow):
         
         self.thumb_label.setPixmap(thumb_pixmap)
         
-        # Runner crop
-        bbox = data_item.get("bbox", [0, 0, img.width, img.height])
+        # Runner crop - support both old and new format for bbox
+        bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, img.width, img.height])
         runner = self.crop_image(img, bbox)
         # Calculate proportional resize to fit within a 300x400 box
         target_width, target_height = 300, 400
@@ -540,48 +584,56 @@ class RunnerViewer(QMainWindow):
         for shoe in data_item.get("shoes", []):
             shoe_bbox = shoe.get("bbox")
             if shoe_bbox and len(shoe_bbox) >= 4:
-                x1, y1, x2, y2 = shoe_bbox
-                runner_bbox = data_item.get("bbox", [0, 0, img.width, img.height])
-                if len(runner_bbox) >= 4:
-                    x1 = runner_bbox[0] + x1
-                    y1 = runner_bbox[1] + y1
-                    x2 = runner_bbox[0] + x2
-                    y2 = runner_bbox[1] + y2
-                    sbbox = [x1, y1, x2, y2]
-                    try:
-                        crop = self.crop_image(img, sbbox)
-                        shoe_img = crop.resize((120, int(120*crop.height/crop.width)))
-                        shoe_pixmap = self.pil_to_qpixmap(shoe_img)
-                        
-                        # Create a container for each shoe with label
-                        shoe_widget = QWidget()
-                        shoe_layout = QVBoxLayout(shoe_widget)
-                        shoe_layout.setContentsMargins(5, 5, 5, 5)
-                        
-                        lbl = QLabel()
-                        lbl.setPixmap(shoe_pixmap)
-                        lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px;")
-                        
-                        # Add brand label if available
-                        brand = shoe.get("new_label") or shoe.get("label", "")
-                        if brand:
-                            brand_lbl = QLabel(brand)
-                            brand_lbl.setStyleSheet("font-size: 11px; color: #666; font-weight: bold;")
-                            brand_lbl.setAlignment(Qt.AlignCenter)
-                            shoe_layout.addWidget(brand_lbl)
-                        
-                        shoe_layout.addWidget(lbl)
-                        self.shoe_box.addWidget(shoe_widget)
-                    except Exception as e:
-                        print(f"Error processing shoe image: {e}")
-        
+                try:
+                    crop = self.crop_image(img, shoe_bbox)
+                    shoe_img = crop.resize((120, int(120*crop.height/crop.width)))
+                    shoe_pixmap = self.pil_to_qpixmap(shoe_img)
+                    
+                    # Create a container for each shoe with label
+                    shoe_widget = QWidget()
+                    shoe_layout = QVBoxLayout(shoe_widget)
+                    shoe_layout.setContentsMargins(5, 5, 5, 5)
+                    
+                    lbl = QLabel()
+                    lbl.setPixmap(shoe_pixmap)
+                    lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px;")
+                    
+                    # Add brand label if available - support both old and new format
+                    brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
+                    if brand:
+                        brand_lbl = QLabel(brand)
+                        brand_lbl.setStyleSheet("font-size: 11px; color: #666; font-weight: bold;")
+                        brand_lbl.setAlignment(Qt.AlignCenter)
+                        shoe_layout.addWidget(brand_lbl)
+                    
+                    shoe_layout.addWidget(lbl)
+                    self.shoe_box.addWidget(shoe_widget)
+                except Exception as e:
+                    print(f"Error processing shoe image: {e}")
+    
         self.shoe_box.addStretch()
 
         # right panel data - desabilita se checado
-        self.bib_number.setText(str(data_item.get("bib", {}).get("number", "")))
+        # Support both old and new format for bib number
+        bib_data = data_item.get("bib", {})
+        bib_number = ""
+        if isinstance(bib_data, dict):
+            # New format: check extracted_data first
+            extracted = bib_data.get("extracted_data", {})
+            if isinstance(extracted, dict):
+                bib_number = str(extracted.get("number", ""))
+        
+        self.bib_number.setText(bib_number)
         self.bib_number.setEnabled(not is_checked)
         
-        cat = data_item.get("bib", {}).get("category")
+        # Support both old and new format for category
+        cat = ""
+        run_data = data_item.get("run_data", {})
+        if isinstance(run_data, dict):
+            cat = run_data.get("run_category", "")
+        if not cat and isinstance(bib_data, dict):
+            cat = bib_data.get("extracted_data", {}).get("category", "")
+        print(cat)
         if cat and cat in self.bib_categories:
             self.bib_category.setCurrentText(cat)
         else:
@@ -591,7 +643,14 @@ class RunnerViewer(QMainWindow):
         for chk in self.brand_checks:
             chk.setChecked(False)
             chk.setEnabled(not is_checked)
-        brands_present = {shoe.get("new_label") or shoe.get("label") for shoe in data_item.get("shoes", [])}
+        
+        # Support both old and new format for shoe brands
+        brands_present = set()
+        for shoe in data_item.get("shoes", []):
+            brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label")
+            if brand:
+                brands_present.add(brand)
+        
         for chk in self.brand_checks:
             if chk.text() in brands_present:
                 chk.setChecked(True)
@@ -619,18 +678,36 @@ class RunnerViewer(QMainWindow):
         self.save_state()
         
         item = self.data[self.current_index]
-        # bib
-        item.setdefault("bib", {})
-        item["bib"]["number"] = self.bib_number.text()
-        cat = self.bib_category.currentText()
-        if cat:
-            item["bib"]["category"] = cat
-        # shoes brands
-        checked = [chk.text() for chk in self.brand_checks if chk.isChecked()]
+        
+        # Handle bib data - support both old and new format
+        bib_data = item.setdefault("bib", {})
+        
+        # For new format, we need to update extracted_data
+        if "extracted_data" in bib_data:
+            extracted_data = bib_data.setdefault("extracted_data", {})
+            extracted_data["number"] = self.bib_number.text()
+            cat = self.bib_category.currentText()
+            if cat:
+                extracted_data["category"] = cat
+        else:
+            # Old format - direct assignment
+            bib_data["number"] = self.bib_number.text()
+            cat = self.bib_category.currentText()
+            if cat:
+                bib_data["category"] = cat
+        
+        # Handle shoes brands
+        checked_brands = [chk.text() for chk in self.brand_checks if chk.isChecked()]
         shoes = item.get("shoes", [])
-        for idx, brand in enumerate(checked):
+        
+        for idx, brand in enumerate(checked_brands):
             if idx < len(shoes):
-                shoes[idx]["new_label"] = brand
+                # For new format, update classification_label; for old format, update new_label
+                if "classification_label" in shoes[idx]:
+                    shoes[idx]["classification_label"] = brand
+                else:
+                    shoes[idx]["new_label"] = brand
+        
         self.data[self.current_index] = item
         self.mark_unsaved_changes()
         self.update_status_bar()
@@ -766,7 +843,19 @@ class RunnerViewer(QMainWindow):
         # Remove todas as imagens com o mesmo número de dorsal
         indices_to_remove = []
         for i, item in enumerate(self.data):
-            if item.get("bib", {}).get("number") == bib_number:
+            # Support both old and new format for bib number
+            item_bib_number = ""
+            bib_data = item.get("bib", {})
+            if isinstance(bib_data, dict):
+                # New format: check extracted_data first
+                extracted = bib_data.get("extracted_data", {})
+                if isinstance(extracted, dict):
+                    item_bib_number = str(extracted.get("number", ""))
+                # Fallback to old format
+                if not item_bib_number:
+                    item_bib_number = str(bib_data.get("number", ""))
+            
+            if item_bib_number == str(bib_number):
                 indices_to_remove.append(i)
         
         # Remove em ordem reversa para não afetar os índices
@@ -791,7 +880,18 @@ class RunnerViewer(QMainWindow):
         self.save_state()
         
         current_item = self.data[self.current_index]
-        bib_number = current_item.get("bib", {}).get("number")
+        
+        # Support both old and new format for bib number
+        bib_number = ""
+        bib_data = current_item.get("bib", {})
+        if isinstance(bib_data, dict):
+            # New format: check extracted_data first
+            extracted = bib_data.get("extracted_data", {})
+            if isinstance(extracted, dict):
+                bib_number = str(extracted.get("number", ""))
+            # Fallback to old format
+            if not bib_number:
+                bib_number = str(bib_data.get("number", ""))
         
         if not bib_number:
             return
@@ -799,8 +899,21 @@ class RunnerViewer(QMainWindow):
         # Remove todas as outras imagens com o mesmo número de dorsal
         indices_to_remove = []
         for i, item in enumerate(self.data):
-            if i != self.current_index and item.get("bib", {}).get("number") == bib_number:
-                indices_to_remove.append(i)
+            if i != self.current_index:
+                # Support both old and new format for bib number
+                item_bib_number = ""
+                item_bib_data = item.get("bib", {})
+                if isinstance(item_bib_data, dict):
+                    # New format: check extracted_data first
+                    extracted = item_bib_data.get("extracted_data", {})
+                    if isinstance(extracted, dict):
+                        item_bib_number = str(extracted.get("number", ""))
+                    # Fallback to old format
+                    if not item_bib_number:
+                        item_bib_number = str(item_bib_data.get("number", ""))
+                
+                if item_bib_number == bib_number:
+                    indices_to_remove.append(i)
         
         # Remove em ordem reversa para não afetar os índices
         for i in reversed(indices_to_remove):

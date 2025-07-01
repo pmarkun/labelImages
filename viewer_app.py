@@ -392,7 +392,7 @@ class RunnerViewer(QMainWindow):
         
         <b>Edição:</b><br>
         <b>Del</b> : Remover imagem<br>
-        <b>K</b> : Manter só esta (remove outras do mesmo número)<br>
+        <b>K</b> : Propagar dados desta imagem para outras do mesmo número<br>
         <b>C</b> : Marcar/desmarcar como checada<br>
         <b>Ctrl+Z</b> : Desfazer última alteração<br><br>
         
@@ -978,7 +978,7 @@ class RunnerViewer(QMainWindow):
         self.update_status_bar()
 
     def keep_only_current_image(self) -> None:
-        """Mantém apenas a imagem atual para o número do dorsal (comando k)"""
+        """Mantém a imagem atual como master e atualiza todas as outras com o mesmo dorsal (comando k)"""
         if not self.data:
             return
         
@@ -996,8 +996,23 @@ class RunnerViewer(QMainWindow):
         if not bib_number:
             return
         
-        # Remove todas as outras imagens com o mesmo número de dorsal
-        indices_to_remove = []
+        # Get current image's category and shoe brands to copy to others
+        current_category = ""
+        if isinstance(run_data, dict):
+            current_category = run_data.get("run_category", "")
+        
+        # Get current shoe brands
+        current_shoes = current_item.get("shoes", [])
+        current_brands = []
+        for shoe in current_shoes:
+            brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
+            if brand:
+                current_brands.append(brand)
+        
+        # Mark current image as checked
+        current_item['checked'] = True
+        
+        # Find and update all other images with the same bib number
         for i, item in enumerate(self.data):
             if i != self.current_index:
                 # Get bib number from run_data
@@ -1007,16 +1022,42 @@ class RunnerViewer(QMainWindow):
                     item_bib_number = str(item_run_data.get("bib_number", ""))
                 
                 if item_bib_number == bib_number:
-                    indices_to_remove.append(i)
-        
-        # Remove em ordem reversa para não afetar os índices
-        for i in reversed(indices_to_remove):
-            self.data.pop(i)
-            if i < self.current_index:
-                self.current_index -= 1
+                    # Uncheck this image
+                    item['checked'] = False
+                    
+                    # Update category to match current image
+                    if not isinstance(item_run_data, dict):
+                        item["run_data"] = {}
+                        item_run_data = item["run_data"]
+                    item_run_data["run_category"] = current_category
+                    
+                    # Update shoe brands to match current image
+                    item_shoes = item.get("shoes", [])
+                    for idx, shoe in enumerate(item_shoes):
+                        # Apply current brands cyclically if we have brands to apply
+                        if current_brands:
+                            brand_to_apply = current_brands[idx % len(current_brands)]
+                            
+                            # Apply to the appropriate field based on what exists
+                            if "classification_label" in shoe:
+                                shoe["classification_label"] = brand_to_apply
+                            elif "new_label" in shoe:
+                                shoe["new_label"] = brand_to_apply
+                            else:
+                                shoe["new_label"] = brand_to_apply
+                        else:
+                            # Clear brands if current image has no brands
+                            if "classification_label" in shoe:
+                                shoe["classification_label"] = ""
+                            elif "new_label" in shoe:
+                                shoe["new_label"] = ""
+                            elif "label" in shoe:
+                                shoe["label"] = ""
         
         self.populate_tree()
         self.show_entry(self.current_index)
+        # Ensure tree selection stays on current item
+        self.select_tree_item_by_index(self.current_index)
         self.mark_unsaved_changes()
         self.update_status_bar()
 
@@ -1125,7 +1166,7 @@ class RunnerViewer(QMainWindow):
         # K - manter apenas esta imagem para o número do dorsal (só se não estiver checada)
         if event.key() == Qt.Key_K:
             if is_checked:
-                QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e outras imagens do mesmo número não podem ser removidas. Pressione 'C' para deschequear primeiro.")
+                QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e não pode propagar suas informações. Pressione 'C' para deschequear primeiro.")
                 return
             self.keep_only_current_image()
             return

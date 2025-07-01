@@ -62,6 +62,19 @@ def save_config(path: str, data: dict) -> None:
         yaml.safe_dump(data, f)
 
 
+class ClickableLabel(QLabel):
+    """A QLabel that can be clicked"""
+    def __init__(self, parent=None, shoe_index=None, callback=None):
+        super().__init__(parent)
+        self.shoe_index = shoe_index
+        self.callback = callback
+    
+    def mousePressEvent(self, event):
+        if self.callback and self.shoe_index is not None:
+            self.callback(event, self.shoe_index)
+        super().mousePressEvent(event)
+
+
 class RunnerViewer(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -652,9 +665,11 @@ class RunnerViewer(QMainWindow):
                         brand_lbl.setAlignment(Qt.AlignCenter)
                         shoe_layout.addWidget(brand_lbl)
                     
-                    lbl = QLabel()
+                    # Make the label clickable - store shoe index for removal
+                    shoe_index = shoes.index(shoe)
+                    lbl = ClickableLabel(shoe_index=shoe_index, callback=self.on_shoe_click)
                     lbl.setPixmap(shoe_pixmap)
-                    lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px;")
+                    lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px; cursor: pointer;")
                     lbl.setAlignment(Qt.AlignCenter)
                     
                     shoe_layout.addWidget(lbl)
@@ -770,6 +785,16 @@ class RunnerViewer(QMainWindow):
         checked_brands = [chk.text() for chk in self.brand_checks if chk.isChecked()]
         shoes = item.get("shoes", [])
         
+        # Get current brands to detect changes for exporting crops
+        old_brands = set()
+        for shoe in shoes:
+            if "classification_label" in shoe and shoe["classification_label"]:
+                old_brands.add(shoe["classification_label"])
+            elif "new_label" in shoe and shoe["new_label"]:
+                old_brands.add(shoe["new_label"])
+            elif "label" in shoe and shoe["label"]:
+                old_brands.add(shoe["label"])
+        
         # Clear all existing brands first
         for shoe in shoes:
             if "classification_label" in shoe:
@@ -796,6 +821,8 @@ class RunnerViewer(QMainWindow):
                     shoe["new_label"] = brand
                 else:
                     shoe["new_label"] = brand
+        
+        # Note: Export is now handled by the "K" key (keep_only_current_image method)
         
         self.data[self.current_index] = item
         self.mark_unsaved_changes()
@@ -1054,6 +1081,9 @@ class RunnerViewer(QMainWindow):
                             elif "label" in shoe:
                                 shoe["label"] = ""
         
+        # Export all shoes from the current (master) image after updating labels
+        self.export_current_shoes()
+        
         self.populate_tree()
         self.show_entry(self.current_index)
         # Ensure tree selection stays on current item
@@ -1276,14 +1306,13 @@ class RunnerViewer(QMainWindow):
         # Aplica as mudanças automaticamente (sem salvar estado novamente)
         self.apply_changes(save_state=False)
         
-        # Marca a imagem como checada após aplicar as mudanças
-        current_item = self.data[self.current_index]
-        current_item['checked'] = True
+        # DON'T automatically check the image when using brand shortcuts
+        # User can manually check with 'C' key if needed
         
-        # Atualiza a visualização para mostrar o status checado
+        # Atualiza a visualização
         self.show_entry(self.current_index)
         
-        # Atualiza a tree para mostrar o ícone de checado
+        # Atualiza a tree
         self.populate_tree()
         self.select_tree_item_by_index(self.current_index)
         
@@ -1427,6 +1456,134 @@ class RunnerViewer(QMainWindow):
             # Set the container to the calculated size
             if total_height > 0:
                 self.shoe_container.setFixedHeight(total_height)
+
+    def export_shoe_crop(self, label, shoe_path):
+        """Export a crop of the shoe to crops/[label]/[shoeimg]"""
+        try:
+            # Verificar se a imagem existe
+            if not os.path.exists(shoe_path):
+                print(f"Shoe image not found: {shoe_path}")
+                return
+            
+            # Criar diretório de destino
+            crops_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crops', label)
+            os.makedirs(crops_dir, exist_ok=True)
+            
+            # Nome do arquivo de destino
+            shoe_filename = os.path.basename(shoe_path)
+            dest_path = os.path.join(crops_dir, shoe_filename)
+            
+            # Copiar o arquivo
+            import shutil
+            shutil.copy2(shoe_path, dest_path)
+            print(f"Exported shoe crop: {dest_path}")
+            
+        except Exception as e:
+            print(f"Error exporting shoe crop: {e}")
+
+    def export_current_shoes(self) -> None:
+        """Export all shoes from the current image to train/[label]/ folders"""
+        if not self.data or self.current_index >= len(self.data):
+            return
+        
+        current_item = self.data[self.current_index]
+        
+        # Get the original image path
+        img_filename = current_item.get("filename") or current_item.get("image_path", "")
+        if not img_filename:
+            print("No image filename found")
+            return
+        
+        img_path = os.path.join(self.config.get("base_path", ""), img_filename)
+        if not os.path.exists(img_path):
+            print(f"Original image not found: {img_path}")
+            return
+        
+        try:
+            from PIL import Image
+            img = Image.open(img_path)
+        except Exception as e:
+            print(f"Error opening image: {e}")
+            return
+        
+        # Get output folder from config
+        output_folder = self.config.get("output_folder", "train")
+        
+        # Process each shoe
+        shoes = current_item.get("shoes", [])
+        for i, shoe in enumerate(shoes):
+            try:
+                # Get the brand/label for this shoe
+                brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
+                if not brand:
+                    print(f"No brand found for shoe {i}")
+                    continue
+                
+                # Get the bounding box
+                shoe_bbox = shoe.get("bbox")
+                if not shoe_bbox or len(shoe_bbox) < 4:
+                    print(f"No valid bbox found for shoe {i}")
+                    continue
+                
+                # Crop the shoe from the original image using existing method
+                shoe_crop = self.crop_image(img, shoe_bbox)
+                
+                # Create output directory structure: train/[brand]/
+                brand_dir = os.path.join(output_folder, brand)
+                os.makedirs(brand_dir, exist_ok=True)
+                
+                # Generate output filename
+                base_name = os.path.splitext(os.path.basename(img_filename))[0]
+                shoe_filename = f"crop_{base_name}_shoe_{i}.jpg"
+                output_path = os.path.join(brand_dir, shoe_filename)
+                
+                # Save the cropped shoe
+                shoe_crop.save(output_path, "JPEG", quality=95)
+                print(f"Exported shoe crop: {output_path}")
+                
+            except Exception as e:
+                print(f"Error exporting shoe {i}: {e}")
+
+    def on_shoe_click(self, event, shoe_index):
+        """Handle clicking on a shoe image to remove it"""
+        from PyQt5.QtWidgets import QMessageBox
+        
+        if not self.data or self.current_index >= len(self.data):
+            return
+            
+        current_item = self.data[self.current_index]
+        shoes = current_item.get("shoes", [])
+        
+        if shoe_index >= len(shoes):
+            return
+            
+        shoe = shoes[shoe_index]
+        brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "Unknown")
+        
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self, 
+            'Remove Shoe', 
+            f'Are you sure you want to remove this {brand} shoe from the image?',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # Save state for undo
+            self.save_state()
+            
+            # Remove the shoe from the data
+            shoes.pop(shoe_index)
+            current_item["shoes"] = shoes
+            
+            # Mark as having unsaved changes
+            self.mark_unsaved_changes()
+            
+            # Refresh the display
+            self.show_entry(self.current_index)
+            self.populate_tree()
+            self.select_tree_item_by_index(self.current_index)
 
 def main() -> None:
     app = QApplication(sys.argv)

@@ -594,7 +594,7 @@ class RunnerViewer(QMainWindow):
         
         # Get the actual available height from the scroll area parent
         # Use a more conservative and reliable approach
-        container_height = 500  # Good default height for shoe display
+        container_height = self.shoe_container.height()  # Good default height for shoe display
         container_width = 270   # Fixed width based on scroll area max width
         
         # Set the container to use the full available height immediately

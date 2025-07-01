@@ -269,13 +269,13 @@ class RunnerViewer(QMainWindow):
         
         # Original image thumbnail
         thumb_group = QGroupBox("Imagem Original")
-        thumb_layout = QVBoxLayout(thumb_group)
+        thumb_layout = QVBoxLayout()
         self.thumb_label = QLabel()
         self.thumb_label.setAlignment(Qt.AlignCenter)
         self.thumb_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 20px; background-color: #f8f9fa;")
         self.thumb_label.setMinimumHeight(200)
         thumb_layout.addWidget(self.thumb_label)
-        layout.addWidget(thumb_group)
+        #layout.addWidget(thumb_group)
         
         # Runner and shoes section
         runner_group = QGroupBox("Corredor e Tênis")
@@ -283,9 +283,6 @@ class RunnerViewer(QMainWindow):
         
         # Runner image
         runner_container = QVBoxLayout()
-        runner_label_header = QLabel("👤 Corredor")
-        runner_label_header.setStyleSheet("font-weight: bold; color: #666; margin-bottom: 5px;")
-        runner_container.addWidget(runner_label_header)
         
         self.runner_label = QLabel()
         self.runner_label.setAlignment(Qt.AlignCenter)
@@ -295,9 +292,6 @@ class RunnerViewer(QMainWindow):
         
         # Shoes section
         shoes_container = QVBoxLayout()
-        shoes_label_header = QLabel("👟 Tênis")
-        shoes_label_header.setStyleSheet("font-weight: bold; color: #666; margin-bottom: 5px;")
-        shoes_container.addWidget(shoes_label_header)
         
         shoes_scroll = QScrollArea()
         shoes_scroll.setWidgetResizable(True)
@@ -308,11 +302,12 @@ class RunnerViewer(QMainWindow):
         self.shoe_box = QVBoxLayout(self.shoe_container)
         self.shoe_box.setSpacing(10)
         shoes_scroll.setWidget(self.shoe_container)
-        shoes_scroll.setMaximumWidth(150)
+        shoes_scroll.setMaximumWidth(300)
         shoes_container.addWidget(shoes_scroll)
         
+        runner_layout.addLayout(thumb_layout, 1)
         runner_layout.addLayout(runner_container, 2)
-        runner_layout.addLayout(shoes_container, 1)
+        runner_layout.addLayout(shoes_container, 2)
         layout.addWidget(runner_group)
         
         return panel
@@ -545,7 +540,7 @@ class RunnerViewer(QMainWindow):
         try:
             img = Image.open(img_path)
         except Exception:
-            self.thumb_label.setText("Imagem não encontrada")
+            print("Imagem não encontrada")
             return
         
         # Thumb of original - com indicador de status
@@ -564,9 +559,9 @@ class RunnerViewer(QMainWindow):
         bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, img.width, img.height])
         runner = self.crop_image(img, bbox)
         # Calculate proportional resize to fit within a 300x400 box
-        target_width, target_height = 300, 400
-        width_ratio = target_width / runner.width
-        height_ratio = target_height / runner.height
+        target_width, target_height = self.runner_label.width(), self.runner_label.height()
+        width_ratio = target_width / runner.width * 0.95
+        height_ratio = target_height / runner.height * 0.95
         # Use the smaller ratio to ensure image fits in both dimensions
         scale_ratio = min(width_ratio, height_ratio)
         runner_img = runner.resize((int(runner.width * scale_ratio), int(runner.height * scale_ratio)))
@@ -586,7 +581,18 @@ class RunnerViewer(QMainWindow):
             if shoe_bbox and len(shoe_bbox) >= 4:
                 try:
                     crop = self.crop_image(img, shoe_bbox)
-                    shoe_img = crop.resize((120, int(120*crop.height/crop.width)))
+                    # define width and height based on the container size
+                    num_shoes = len(data_item.get("shoes", []))
+                    shoe_height = self.shoe_container.height() / num_shoes * 0.95
+                    shoe_width = self.shoe_container.width() * 0.85
+                    #number of shoes
+                    shoe_height_ratio = shoe_height / crop.height
+                    shoe_width_ratio = shoe_width / crop.width
+                    if crop.width > shoe_width:
+                        shoe_ratio = shoe_width_ratio
+                    else:
+                        shoe_ratio = shoe_height_ratio
+                    shoe_img = crop.resize((int(crop.width * shoe_ratio), int(crop.height * shoe_ratio)))
                     shoe_pixmap = self.pil_to_qpixmap(shoe_img)
                     
                     # Create a container for each shoe with label

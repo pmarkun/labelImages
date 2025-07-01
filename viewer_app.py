@@ -633,7 +633,6 @@ class RunnerViewer(QMainWindow):
             cat = run_data.get("run_category", "")
         if not cat and isinstance(bib_data, dict):
             cat = bib_data.get("extracted_data", {}).get("category", "")
-        print(cat)
         if cat and cat in self.bib_categories:
             self.bib_category.setCurrentText(cat)
         else:

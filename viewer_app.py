@@ -261,6 +261,16 @@ class RunnerViewer(QMainWindow):
         header.setStyleSheet("font-size: 16px; font-weight: bold; color: #007acc; margin-bottom: 10px;")
         layout.addWidget(header)
         
+        # Filter section
+        filter_group = QGroupBox("Filtros")
+        filter_layout = QVBoxLayout(filter_group)
+        
+        self.filter_unchecked_only = QCheckBox("Mostrar apenas dorsais sem imagens checadas")
+        self.filter_unchecked_only.stateChanged.connect(self.on_filter_changed)
+        filter_layout.addWidget(self.filter_unchecked_only)
+        
+        layout.addWidget(filter_group)
+        
         # Tree widget
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Categoria / Dorsal / Nome"])
@@ -405,7 +415,7 @@ class RunnerViewer(QMainWindow):
         
         <b>Edição:</b><br>
         <b>Del</b> : Remover imagem<br>
-        <b>K</b> : Propagar dados desta imagem para outras do mesmo número<br>
+        <b>K</b> : Propagar dados e exportar crops de TODAS as imagens do mesmo dorsal<br>
         <b>C</b> : Marcar/desmarcar como checada<br>
         <b>Ctrl+Z</b> : Desfazer última alteração<br><br>
         
@@ -502,6 +512,10 @@ class RunnerViewer(QMainWindow):
     def populate_tree(self) -> None:
         self.tree.clear()
         cats = {}
+        
+        # Check if we should filter for unchecked only
+        filter_unchecked_only = hasattr(self, 'filter_unchecked_only') and self.filter_unchecked_only.isChecked()
+        
         for idx, item in enumerate(self.data):
             # Get category from run_data
             cat = "?"
@@ -515,6 +529,10 @@ class RunnerViewer(QMainWindow):
             bib_num = "?"
             if isinstance(run_data, dict):
                 bib_num = run_data.get("bib_number", "?")
+            
+            # Apply filter: skip this bib if it has checked images and we're filtering for unchecked only
+            if filter_unchecked_only and bib_num != "?" and self.bib_has_checked_images(str(bib_num)):
+                continue
             
             is_checked = item.get("checked", False)
             
@@ -1482,67 +1500,93 @@ class RunnerViewer(QMainWindow):
             print(f"Error exporting shoe crop: {e}")
 
     def export_current_shoes(self) -> None:
-        """Export all shoes from the current image to train/[label]/ folders"""
+        """Export all shoes from ALL images with the same bib number to train/[label]/ folders"""
         if not self.data or self.current_index >= len(self.data):
             return
         
         current_item = self.data[self.current_index]
         
-        # Get the original image path
-        img_filename = current_item.get("filename") or current_item.get("image_path", "")
-        if not img_filename:
-            print("No image filename found")
-            return
+        # Get bib number from current image
+        bib_number = ""
+        run_data = current_item.get("run_data", {})
+        if isinstance(run_data, dict):
+            bib_number = str(run_data.get("bib_number", ""))
         
-        img_path = os.path.join(self.config.get("base_path", ""), img_filename)
-        if not os.path.exists(img_path):
-            print(f"Original image not found: {img_path}")
-            return
-        
-        try:
-            from PIL import Image
-            img = Image.open(img_path)
-        except Exception as e:
-            print(f"Error opening image: {e}")
+        if not bib_number:
+            print("No bib number found for current image")
             return
         
         # Get output folder from config
         output_folder = self.config.get("output_folder", "train")
         
-        # Process each shoe
-        shoes = current_item.get("shoes", [])
-        for i, shoe in enumerate(shoes):
+        # Find all images with the same bib number and export their shoes
+        exported_count = 0
+        for idx, item in enumerate(self.data):
+            # Get bib number from this item
+            item_bib_number = ""
+            item_run_data = item.get("run_data", {})
+            if isinstance(item_run_data, dict):
+                item_bib_number = str(item_run_data.get("bib_number", ""))
+            
+            # Skip if not the same bib number
+            if item_bib_number != bib_number:
+                continue
+            
+            # Get the original image path
+            img_filename = item.get("filename") or item.get("image_path", "")
+            if not img_filename:
+                print(f"No image filename found for item {idx}")
+                continue
+            
+            img_path = os.path.join(self.config.get("base_path", ""), img_filename)
+            if not os.path.exists(img_path):
+                print(f"Original image not found: {img_path}")
+                continue
+            
             try:
-                # Get the brand/label for this shoe
-                brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
-                if not brand:
-                    print(f"No brand found for shoe {i}")
-                    continue
-                
-                # Get the bounding box
-                shoe_bbox = shoe.get("bbox")
-                if not shoe_bbox or len(shoe_bbox) < 4:
-                    print(f"No valid bbox found for shoe {i}")
-                    continue
-                
-                # Crop the shoe from the original image using existing method
-                shoe_crop = self.crop_image(img, shoe_bbox)
-                
-                # Create output directory structure: train/[brand]/
-                brand_dir = os.path.join(output_folder, brand)
-                os.makedirs(brand_dir, exist_ok=True)
-                
-                # Generate output filename
-                base_name = os.path.splitext(os.path.basename(img_filename))[0]
-                shoe_filename = f"crop_{base_name}_shoe_{i}.jpg"
-                output_path = os.path.join(brand_dir, shoe_filename)
-                
-                # Save the cropped shoe
-                shoe_crop.save(output_path, "JPEG", quality=95)
-                print(f"Exported shoe crop: {output_path}")
-                
+                from PIL import Image
+                img = Image.open(img_path)
             except Exception as e:
-                print(f"Error exporting shoe {i}: {e}")
+                print(f"Error opening image {img_path}: {e}")
+                continue
+            
+            # Process each shoe in this image
+            shoes = item.get("shoes", [])
+            for i, shoe in enumerate(shoes):
+                try:
+                    # Get the brand/label for this shoe
+                    brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
+                    if not brand:
+                        print(f"No brand found for shoe {i} in image {idx}")
+                        continue
+                    
+                    # Get the bounding box
+                    shoe_bbox = shoe.get("bbox")
+                    if not shoe_bbox or len(shoe_bbox) < 4:
+                        print(f"No valid bbox found for shoe {i} in image {idx}")
+                        continue
+                    
+                    # Crop the shoe from the original image using existing method
+                    shoe_crop = self.crop_image(img, shoe_bbox)
+                    
+                    # Create output directory structure: train/[brand]/
+                    brand_dir = os.path.join(output_folder, brand)
+                    os.makedirs(brand_dir, exist_ok=True)
+                    
+                    # Generate output filename with image index to avoid duplicates
+                    base_name = os.path.splitext(os.path.basename(img_filename))[0]
+                    shoe_filename = f"crop_{base_name}_img{idx}_shoe_{i}.jpg"
+                    output_path = os.path.join(brand_dir, shoe_filename)
+                    
+                    # Save the cropped shoe
+                    shoe_crop.save(output_path, "JPEG", quality=95)
+                    print(f"Exported shoe crop: {output_path}")
+                    exported_count += 1
+                    
+                except Exception as e:
+                    print(f"Error exporting shoe {i} from image {idx}: {e}")
+        
+        print(f"Exported {exported_count} shoe crops for bib number {bib_number}")
 
     def on_shoe_click(self, event, shoe_index):
         """Handle clicking on a shoe image to remove it"""
@@ -1584,6 +1628,22 @@ class RunnerViewer(QMainWindow):
             self.show_entry(self.current_index)
             self.populate_tree()
             self.select_tree_item_by_index(self.current_index)
+
+    def on_filter_changed(self) -> None:
+        """Handle filter checkbox changes"""
+        if self.data:
+            self.populate_tree()
+
+    def bib_has_checked_images(self, bib_number: str) -> bool:
+        """Check if a bib number has any checked images"""
+        for item in self.data:
+            # Get bib number from run_data
+            item_run_data = item.get("run_data", {})
+            if isinstance(item_run_data, dict):
+                item_bib_number = str(item_run_data.get("bib_number", ""))
+                if item_bib_number == bib_number and item.get("checked", False):
+                    return True
+        return False
 
 def main() -> None:
     app = QApplication(sys.argv)

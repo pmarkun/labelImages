@@ -4,14 +4,15 @@ Image display and management for the Runner Viewer application.
 import os
 from typing import List, Dict, Any, Optional
 from PIL import Image
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QMessageBox, QSizePolicy
 from .widgets import ClickableLabel
 from utils.image_utils import crop_image, pil_to_qpixmap, draw_bounding_boxes, load_image_cached
+from utils.lazy_image_loader import get_lazy_cache
 
 
 class ImageDisplayManager:
-    """Manages image display in the center panel."""
+    """Manages image display in the center panel with lazy loading."""
     
     def __init__(self, thumb_label: QLabel, runner_label: QLabel, 
                  shoe_container: QWidget, shoe_layout: QVBoxLayout):
@@ -21,47 +22,144 @@ class ImageDisplayManager:
         self.shoe_layout = shoe_layout
         self.shoe_click_callback = None
         
-        # Cache for resized images to avoid repeated processing
-        self._thumbnail_cache = {}
-        self._runner_cache = {}
-        self._shoe_cache = {}
+        # Cache for processed components (lighter than full images)
+        self._pixmap_cache = {}  # Stores final QPixmaps
+        self._pending_displays = {}  # Track pending lazy loads
+        
+        # Get lazy cache instance
+        self._lazy_cache = get_lazy_cache()
+        
+        # Current display state
+        self._current_data_item = None
+        self._current_base_path = None
+        
+        # Timer for batch updates
+        self._update_timer = QTimer()
+        self._update_timer.setSingleShot(True)
+        self._update_timer.timeout.connect(self._process_pending_updates)
+        self._update_timer.setInterval(50)  # 50ms delay
     
     def clear_cache(self):
         """Clear all display caches."""
-        self._thumbnail_cache.clear()
-        self._runner_cache.clear()
-        self._shoe_cache.clear()
+        self._pixmap_cache.clear()
+        self._pending_displays.clear()
     
     def set_shoe_click_callback(self, callback) -> None:
         """Set the callback for shoe clicks."""
         self.shoe_click_callback = callback
     
     def display_image(self, data_item: Dict[str, Any], base_path: str) -> None:
-        """Display an image with all its components."""
+        """Display an image with lazy loading."""
         if not data_item:
             return
         
-        # Check if image is checked
-        is_checked = data_item.get('checked', False)
+        # Store current display request
+        self._current_data_item = data_item
+        self._current_base_path = base_path
         
         # Get image path
         img_filename = data_item.get("filename") or data_item.get("image_path", "")
         img_path = os.path.join(base_path, img_filename)
         
-        try:
-            img = load_image_cached(img_path)  # Use cached loading
-        except Exception:
-            print("Imagem não encontrada")
+        # Show loading placeholder immediately
+        self._show_loading_placeholder(data_item.get('checked', False))
+        
+        # Try to get image from lazy cache
+        img = self._lazy_cache.get_image(
+            img_path, 
+            callback=self._on_image_loaded,
+            priority=0  # High priority for current image
+        )
+        
+        if img is not None:
+            # Image already cached, display immediately
+            self._display_image_components(img, data_item, img_path)
+    
+    def _show_loading_placeholder(self, is_checked: bool):
+        """Show loading placeholder while image loads."""
+        # Apply style based on checked status
+        if is_checked:
+            style = "border: 4px solid #28a745; border-radius: 8px; padding: 16px; background-color: #d4edda;"
+        else:
+            style = "border: 2px dashed #ddd; border-radius: 8px; padding: 20px; background-color: #f8f9fa;"
+        
+        self.thumb_label.setStyleSheet(style)
+        self.thumb_label.setText("Carregando...")
+        self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.runner_label.setText("Carregando...")
+        self.runner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Clear shoes
+        self._clear_shoes()
+    
+    def _on_image_loaded(self, img_path: str, img: Optional[Image.Image]):
+        """Callback when image is loaded by lazy cache."""
+        if img is None:
+            self._show_error_placeholder()
             return
         
-        # Display thumbnail
-        self._display_thumbnail(img, is_checked, data_item, img_path)
+        # Check if this is still the current image request
+        if (self._current_data_item and self._current_base_path):
+            current_img_filename = self._current_data_item.get("filename") or self._current_data_item.get("image_path", "")
+            current_img_path = os.path.join(self._current_base_path, current_img_filename)
+            
+            if img_path == current_img_path:
+                self._display_image_components(img, self._current_data_item, img_path)
+    
+    def _show_error_placeholder(self):
+        """Show error placeholder when image fails to load."""
+        self.thumb_label.setText("Erro ao carregar")
+        self.thumb_label.setStyleSheet("border: 2px solid red; border-radius: 8px; padding: 20px; background-color: #ffe6e6;")
+        self.runner_label.setText("Erro ao carregar")
+    
+    def _display_image_components(self, img: Image.Image, data_item: Dict[str, Any], img_path: str):
+        """Display all image components."""
+        # Check if already processed and cached
+        cache_key = f"{img_path}_{hash(str(data_item))}"
         
-        # Display runner crop
-        self._display_runner(img, data_item, img_path)
+        if cache_key in self._pixmap_cache:
+            cached_data = self._pixmap_cache[cache_key]
+            self._apply_cached_display(cached_data, data_item.get('checked', False))
+            return
         
-        # Display shoes
-        self._display_shoes(img, data_item, img_path)
+        # Process in background to avoid blocking UI
+        self._update_timer.start()  # Batch updates
+        
+        try:
+            # Generate all components
+            is_checked = data_item.get('checked', False)
+            
+            # Thumbnail
+            thumb_pixmap = self._create_thumbnail(img, data_item)
+            
+            # Runner
+            runner_pixmap = self._create_runner_crop(img, data_item)
+            
+            # Shoes
+            shoe_widgets = self._create_shoe_widgets(img, data_item)
+            
+            # Cache the results
+            cached_data = {
+                'thumb_pixmap': thumb_pixmap,
+                'runner_pixmap': runner_pixmap,
+                'shoe_widgets': shoe_widgets
+            }
+            
+            if len(self._pixmap_cache) < 50:  # Limit cache size
+                self._pixmap_cache[cache_key] = cached_data
+            
+            # Apply to UI
+            self._apply_cached_display(cached_data, is_checked)
+            
+        except Exception as e:
+            print(f"Error processing image: {e}")
+            self._show_error_placeholder()
+    
+    def _process_pending_updates(self):
+        """Process any pending UI updates."""
+        # This method can be used for batching updates if needed
+        pass
     
     def _display_thumbnail(self, img: Image.Image, is_checked: bool, data_item: Dict[str, Any], img_path: Optional[str] = None) -> None:
         """Display the thumbnail image with bounding boxes."""

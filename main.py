@@ -11,7 +11,8 @@ from PyQt5.QtWidgets import QApplication, QCheckBox, QTreeWidgetItem, QMessageBo
 
 from ui.main_window import RunnerViewerMainWindow
 from ui.tree_widget import TreeManager
-from ui.image_display import ImageDisplayManager, ExportManager
+from ui.fast_image_display import FastImageDisplayManager
+from ui.image_display import ExportManager
 from ui.export_dialog import ExportDialog
 from core.data_manager import DataManager
 from utils.config import load_config, save_config
@@ -50,7 +51,7 @@ class RunnerViewerApp(QObject):
         self.data_manager = DataManager()
         self.main_window = RunnerViewerMainWindow()
         self.tree_manager = TreeManager(self.main_window.get_tree_widget())
-        self.image_display = ImageDisplayManager(
+        self.image_display = FastImageDisplayManager(
             self.main_window.get_thumb_label(),
             self.main_window.get_runner_label(),
             self.main_window.get_shoe_container(),
@@ -254,23 +255,43 @@ class RunnerViewerApp(QObject):
         self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only)
     
     def show_entry(self, index: int) -> None:
-        """Display entry at given index."""
+        """Display entry using FastImageDisplayManager."""
         if not self.data_manager.data:
             return
         
-        index = max(0, min(index, len(self.data_manager.data) - 1))
+        index = max(0, min(index, len(self.data_manager.data)-1))
         self.current_index = index
         data_item = self.data_manager.data[index]
         
-        # Display the image
+        # Use FastImageDisplayManager to display the image
         base_path = self.config.get("base_path", "")
         self.image_display.display_image(data_item, base_path)
+        
+        # Preload nearby images for faster navigation
+        self._preload_nearby_images(index)
         
         # Update right panel data
         self._update_right_panel_data(data_item)
         
         # Update status bar
         self.update_status_bar()
+    
+    def _preload_nearby_images(self, current_index: int):
+        """Preload images around current index for faster navigation."""
+        if not self.data_manager.data:
+            return
+        
+        # Get nearby items (5 before and 5 after)
+        start_idx = max(0, current_index - 5)
+        end_idx = min(len(self.data_manager.data), current_index + 6)
+        
+        nearby_items = []
+        for i in range(start_idx, end_idx):
+            if i != current_index:  # Don't preload current image
+                nearby_items.append(self.data_manager.data[i])
+        
+        base_path = self.config.get("base_path", "")
+        self.image_display.preload_images(nearby_items, base_path)
     
     def _update_right_panel_data(self, data_item: Dict[str, Any]) -> None:
         """Update the right panel with current data."""

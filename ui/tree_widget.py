@@ -1,0 +1,245 @@
+"""
+Tree widget management for the Runner Viewer application.
+"""
+from typing import List, Dict, Any, Optional
+from PyQt5.QtCore import Qt, QObject, pyqtSignal
+from PyQt5.QtWidgets import QTreeWidget, QTreeWidgetItem
+from ..core.models import DataCache, get_position_from_bib
+
+
+class TreeManager(QObject):
+    """Manages the tree widget operations and data display."""
+    
+    # Signals
+    item_expanded = pyqtSignal(object)  # QTreeWidgetItem
+    
+    def __init__(self, tree_widget: QTreeWidget):
+        super().__init__()
+        self.tree = tree_widget
+        self.data: List[Dict[str, Any]] = []
+        self.cache = DataCache()
+        self._expansion_connected = False
+    
+    def set_data(self, data: List[Dict[str, Any]]) -> None:
+        """Set the data and rebuild cache."""
+        self.data = data
+        self.cache.build_cache(data)
+    
+    def populate_tree(self, selected_category: str = None, filter_unchecked_only: bool = False) -> None:
+        """Populate the tree with bib numbers and images."""
+        self.tree.clear()
+        
+        if selected_category == "Todas as categorias":
+            selected_category = None
+        
+        # Get relevant cache entries for the selected category
+        relevant_bibs = []
+        for cache_key, cache_data in self.cache.bib_cache.items():
+            bib_number = cache_data['bib_number']
+            category = cache_data['category']
+            
+            # Skip if doesn't match category filter
+            if selected_category and category != selected_category:
+                continue
+            
+            # Apply filter: skip this bib if it has checked images and we're filtering for unchecked only
+            if filter_unchecked_only and bib_number != "?" and self._bib_has_checked_images(str(bib_number)):
+                continue
+            
+            relevant_bibs.append(cache_data)
+        
+        # Sort by position (numeric value of bib number)
+        relevant_bibs.sort(key=lambda x: get_position_from_bib(x['bib_number']))
+        
+        # Create tree nodes
+        for cache_data in relevant_bibs:
+            bib_number = cache_data['bib_number']
+            position = get_position_from_bib(bib_number)
+            
+            # Create the bib node with format [Position]. [Bib Number]
+            if position == 999999:
+                bib_text = f"?. {bib_number}"
+            else:
+                bib_text = f"{position}. {bib_number}"
+            
+            bib_node = QTreeWidgetItem(self.tree, [bib_text])
+            
+            # Store the best image index as the bib node's data
+            bib_node.setData(0, Qt.UserRole, cache_data['index'])
+            
+            # Mark that this node needs to load children when expanded
+            bib_node.setData(1, Qt.UserRole, {
+                'bib_number': bib_number, 
+                'category': selected_category, 
+                'loaded': False
+            })
+            
+            # Add a dummy child so the expansion triangle appears
+            dummy_child = QTreeWidgetItem(bib_node, ["Carregando..."])
+        
+        # Connect the tree expansion signal to load children on demand
+        if not self._expansion_connected:
+            self.tree.itemExpanded.connect(self._on_tree_item_expanded)
+            self._expansion_connected = True
+        
+        # Keep tree collapsed by default
+        self.tree.collapseAll()
+    
+    def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
+        """Load children when a bib node is expanded."""
+        # Check if this item needs to load children
+        item_data = item.data(1, Qt.UserRole)
+        if not isinstance(item_data, dict) or item_data.get('loaded', True):
+            return
+        
+        bib_number = item_data.get('bib_number')
+        category = item_data.get('category')
+        
+        if not bib_number:
+            return
+        
+        # Remove the dummy child
+        item.takeChildren()
+        
+        # Find all images for this bib number
+        images_for_bib = []
+        for idx, data_item in enumerate(self.data):
+            # Get bib number from run_data
+            item_bib_number = ""
+            run_data = data_item.get("run_data", {})
+            if isinstance(run_data, dict):
+                item_bib_number = str(run_data.get("bib_number", ""))
+            
+            # Get category
+            item_category = ""
+            if isinstance(run_data, dict):
+                item_category = run_data.get("run_category", "")
+                if item_category == "Not Identifiable":
+                    item_category = "?"
+            
+            # Skip if doesn't match bib number or category filter
+            if item_bib_number != bib_number:
+                continue
+            if category and category != "?" and item_category != category:
+                continue
+            
+            images_for_bib.append((idx, data_item))
+        
+        # Add child nodes for each image
+        for idx, data_item in images_for_bib:
+            is_checked = data_item.get("checked", False)
+            
+            # Support both old and new format for filename
+            img_name = data_item.get("filename") or data_item.get("image_path", str(idx))
+            if img_name != str(idx):
+                # Extract just the filename part if it's a path
+                import os
+                img_name = os.path.basename(img_name)
+            
+            if is_checked:
+                img_name = "✓ " + img_name
+            
+            img_node = QTreeWidgetItem(item, [img_name])
+            img_node.setData(0, Qt.UserRole, idx)
+        
+        # Mark as loaded
+        item_data['loaded'] = True
+        item.setData(1, Qt.UserRole, item_data)
+        
+        # Emit signal for external handling
+        self.item_expanded.emit(item)
+    
+    def select_tree_item_by_index(self, data_index: int) -> None:
+        """Selects the tree item that corresponds to the given data index."""
+        if data_index < 0 or data_index >= len(self.data):
+            return
+        
+        def find_item_with_index(item: QTreeWidgetItem, target_index: int) -> Optional[QTreeWidgetItem]:
+            """Recursively search for tree item with specific data index."""
+            # Check if this item has the target index
+            item_index = item.data(0, Qt.UserRole)
+            if item_index == target_index:
+                return item
+            
+            # Search children
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if child:
+                    result = find_item_with_index(child, target_index)
+                    if result:
+                        return result
+            return None
+        
+        # Search through all top-level items (bib nodes)
+        for i in range(self.tree.topLevelItemCount()):
+            bib_item = self.tree.topLevelItem(i)
+            if bib_item:
+                # Check if this bib node itself has the target index (best image)
+                if bib_item.data(0, Qt.UserRole) == data_index:
+                    self.tree.setCurrentItem(bib_item)
+                    return
+                
+                # Search in children (if expanded)
+                result = find_item_with_index(bib_item, data_index)
+                if result:
+                    # Expand the parent if needed
+                    if not bib_item.isExpanded():
+                        bib_item.setExpanded(True)
+                    self.tree.setCurrentItem(result)
+                    return
+    
+    def select_next_tree_item(self) -> None:
+        """Select the next item in the tree after current operations."""
+        current_item = self.tree.currentItem()
+        if not current_item:
+            # If no current item, select the first one
+            if self.tree.topLevelItemCount() > 0:
+                first_item = self.tree.topLevelItem(0)
+                if first_item:
+                    self.tree.setCurrentItem(first_item)
+            return
+        
+        # Try to find the next item
+        next_item = None
+        
+        # If current item has children and is expanded, go to first child
+        if current_item.childCount() > 0 and current_item.isExpanded():
+            next_item = current_item.child(0)
+        else:
+            # Look for next sibling or go up to parent's next sibling
+            parent = current_item.parent()
+            if parent:
+                # We're in a child, find next sibling or parent's next sibling
+                current_index = parent.indexOfChild(current_item)
+                if current_index + 1 < parent.childCount():
+                    next_item = parent.child(current_index + 1)
+                else:
+                    # No more siblings, find parent's next sibling
+                    parent_index = self.tree.indexOfTopLevelItem(parent)
+                    if parent_index + 1 < self.tree.topLevelItemCount():
+                        next_item = self.tree.topLevelItem(parent_index + 1)
+            else:
+                # We're at top level, find next top level item
+                current_index = self.tree.indexOfTopLevelItem(current_item)
+                if current_index + 1 < self.tree.topLevelItemCount():
+                    next_item = self.tree.topLevelItem(current_index + 1)
+        
+        # If we found a next item, select it
+        if next_item:
+            self.tree.setCurrentItem(next_item)
+        else:
+            # No next item found, stay on current or go to last available
+            if self.tree.topLevelItemCount() > 0:
+                last_item = self.tree.topLevelItem(self.tree.topLevelItemCount() - 1)
+                if last_item:
+                    self.tree.setCurrentItem(last_item)
+    
+    def _bib_has_checked_images(self, bib_number: str) -> bool:
+        """Check if a bib number has any checked images."""
+        for item in self.data:
+            run_data = item.get("run_data", {})
+            if isinstance(run_data, dict):
+                item_bib_number = str(run_data.get("bib_number", ""))
+                if item_bib_number == bib_number and item.get("checked", False):
+                    return True
+        return False

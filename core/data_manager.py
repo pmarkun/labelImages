@@ -33,16 +33,17 @@ class DataManager:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
     
     def collect_stats(self, config_labels: List[Dict[str, Any]]) -> tuple:
-        """Collect brands and categories from data."""
+        """Collect brands, categories and genders from data."""
         brands = set()
         cats = set()
+        genders = set()
         
         # Add brands from config
         for label_config in config_labels:
             if isinstance(label_config, dict) and "label" in label_config:
                 brands.add(label_config["label"])
         
-        # Add brands and categories from data
+        # Add brands, categories and genders from data
         for item in self.data:
             for shoe in item.get("shoes", []):
                 brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label")
@@ -54,9 +55,13 @@ class DataManager:
                 bib_cat = run_data.get("run_category")
                 if bib_cat and bib_cat != "Not Identifiable":
                     cats.add(bib_cat)
+                
+                gender = run_data.get("gender")
+                if gender:
+                    genders.add(gender)
         
         self.cache.build_cache(self.data)
-        return sorted(brands), sorted(cats)
+        return sorted(brands), sorted(cats), sorted(genders)
     
     def save_state(self, current_index: int) -> None:
         """Save current state for undo functionality."""

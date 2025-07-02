@@ -232,6 +232,10 @@ class RunnerViewerMainWindow(QMainWindow):
         """Get the unchecked filter checkbox."""
         return self.left_panel.filter_unchecked_only
     
+    def get_gender_filter(self) -> QComboBox:
+        """Get the gender filter combo box."""
+        return self.left_panel.gender_filter
+    
     def get_bib_number_field(self) -> QLineEdit:
         """Get the bib number input field."""
         return self.right_panel.bib_number

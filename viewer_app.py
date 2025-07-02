@@ -64,6 +64,7 @@ class RunnerViewer(RunnerViewerMainWindow):
         self.current_index = 0
         self.brands: List[str] = []
         self.bib_categories: List[str] = []
+        self.genders: List[str] = []
         self.backup_done = False
         self.has_unsaved_changes = False
         
@@ -113,9 +114,9 @@ class RunnerViewer(RunnerViewerMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to load JSON: {e}")
 
     def collect_stats(self) -> None:
-        """Collect brands and categories using the data manager."""
+        """Collect brands, categories and genders using the data manager."""
         config_labels = self.config.get("labels", [])
-        self.brands, self.bib_categories = self.data_manager.collect_stats(config_labels)
+        self.brands, self.bib_categories, self.genders = self.data_manager.collect_stats(config_labels)
 
         # Update UI components
         bib_category = self.get_bib_category_field()
@@ -127,6 +128,12 @@ class RunnerViewer(RunnerViewerMainWindow):
         category_filter.clear()
         category_filter.addItem("Todas as categorias")
         category_filter.addItems(self.bib_categories)
+
+        # Update gender filter
+        gender_filter = self.get_gender_filter()
+        gender_filter.clear()
+        gender_filter.addItem("Todos os gêneros")
+        gender_filter.addItems(self.genders)
 
         # Setup brand checkboxes using the right panel
         self.right_panel.setup_brand_checkboxes(self.brands)
@@ -145,19 +152,30 @@ class RunnerViewer(RunnerViewerMainWindow):
         if selected_category == "Todas as categorias":
             selected_category = None
         
+        # Get selected gender filter
+        gender_filter = self.get_gender_filter()
+        selected_gender = gender_filter.currentText()
+        if selected_gender == "Todos os gêneros":
+            selected_gender = None
+        
         # Check if we should filter for unchecked only
         filter_unchecked_only = self.get_filter_unchecked_only().isChecked()
         
-        # Get relevant cache entries for the selected category
+        # Get relevant cache entries for the selected category and gender
         relevant_bibs = []
         cache = self.data_manager.cache
         
         for cache_key, cache_data in cache.bib_cache.items():
             bib_number = cache_data['bib_number']
             category = cache_data['category']
+            gender = cache_data['gender']
             
             # Skip if doesn't match category filter
             if selected_category and category != selected_category:
+                continue
+            
+            # Skip if doesn't match gender filter
+            if selected_gender and gender != selected_gender:
                 continue
             
             # Apply filter: skip this bib if it has checked images and we're filtering for unchecked only

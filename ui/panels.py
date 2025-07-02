@@ -44,6 +44,13 @@ class LeftPanel(QWidget):
         self.category_filter.activated.connect(lambda: self.filter_changed.emit())
         filter_layout.addWidget(self.category_filter)
         
+        # Gender filter
+        filter_layout.addWidget(QLabel("Gênero:"))
+        self.gender_filter = QComboBox()
+        self.gender_filter.addItem("Todos os gêneros")
+        self.gender_filter.activated.connect(lambda: self.filter_changed.emit())
+        filter_layout.addWidget(self.gender_filter)
+        
         self.filter_unchecked_only = QCheckBox("Mostrar apenas dorsais sem imagens checadas")
         self.filter_unchecked_only.stateChanged.connect(lambda: self.filter_changed.emit())
         filter_layout.addWidget(self.filter_unchecked_only)

@@ -164,7 +164,16 @@ class RunnerViewerApp(QObject):
             self.config["base_path"] = folder
             save_config(self.config_path, self.config)
             if self.json_path:
-                self.populate_tree()
+                # Save expansion state before repopulating
+                expansion_state = self.tree_manager.get_expansion_state()
+                
+                # Repopulate tree with expansion state preserved
+                self.tree_manager.set_data(self.data_manager.data)
+                selected_category = self.main_window.get_category_filter().currentText()
+                selected_gender = self.main_window.get_gender_filter().currentText()
+                filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+                self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+                
                 self.show_entry(0)
     
     def collect_stats(self) -> None:
@@ -320,6 +329,8 @@ class RunnerViewerApp(QObject):
     def on_filter_changed(self) -> None:
         """Handle filter changes."""
         if self.data_manager.data:
+            # Note: For filter changes, we intentionally don't preserve expansion
+            # because the user is changing what's displayed, so collapsing makes sense
             self.populate_tree()
             # Select first item if available
             tree = self.main_window.get_tree_widget()
@@ -450,8 +461,18 @@ class RunnerViewerApp(QObject):
             self.mark_unsaved_changes()
         
         def refresh_display():
+            # Save expansion state before refreshing
+            expansion_state = self.tree_manager.get_expansion_state()
+            
             self.show_entry(self.current_index)
-            self.populate_tree()
+            
+            # Repopulate tree with expansion state preserved
+            self.tree_manager.set_data(self.data_manager.data)
+            selected_category = self.main_window.get_category_filter().currentText()
+            selected_gender = self.main_window.get_gender_filter().currentText()
+            filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+            self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+            
             self.tree_manager.select_tree_item_by_index(self.current_index)
         
         if self.export_manager:
@@ -566,10 +587,20 @@ class RunnerViewerApp(QObject):
     
     def _undo(self) -> None:
         """Undo last change."""
+        # Save expansion state before undo
+        expansion_state = self.tree_manager.get_expansion_state()
+        
         state = self.data_manager.undo()
         if state:
             self.current_index = state['current_index']
-            self.populate_tree()
+            
+            # Repopulate tree with expansion state preserved
+            self.tree_manager.set_data(self.data_manager.data)
+            selected_category = self.main_window.get_category_filter().currentText()
+            selected_gender = self.main_window.get_gender_filter().currentText()
+            filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+            self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+            
             self.show_entry(self.current_index)
             self.save_json()
             self.update_status_bar()

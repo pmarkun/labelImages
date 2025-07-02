@@ -25,21 +25,29 @@ class TreeManager(QObject):
         self.data = data
         self.cache.build_cache(data)
     
-    def populate_tree(self, selected_category: str = None, filter_unchecked_only: bool = False) -> None:
+    def populate_tree(self, selected_category: Optional[str] = None, selected_gender: Optional[str] = None, filter_unchecked_only: bool = False) -> None:
         """Populate the tree with bib numbers and images."""
         self.tree.clear()
         
         if selected_category == "Todas as categorias":
             selected_category = None
         
-        # Get relevant cache entries for the selected category
+        if selected_gender == "Todos os gêneros":
+            selected_gender = None
+        
+        # Get relevant cache entries for the selected category and gender
         relevant_bibs = []
         for cache_key, cache_data in self.cache.bib_cache.items():
             bib_number = cache_data['bib_number']
             category = cache_data['category']
+            gender = cache_data['gender']
             
             # Skip if doesn't match category filter
             if selected_category and category != selected_category:
+                continue
+            
+            # Skip if doesn't match gender filter
+            if selected_gender and gender != selected_gender:
                 continue
             
             # Apply filter: skip this bib if it has checked images and we're filtering for unchecked only
@@ -48,19 +56,20 @@ class TreeManager(QObject):
             
             relevant_bibs.append(cache_data)
         
-        # Sort by position (numeric value of bib number)
-        relevant_bibs.sort(key=lambda x: get_position_from_bib(x['bib_number']))
+        # Sort by position (numeric value of bib number) using the 'position' field
+        relevant_bibs.sort(key=lambda x: get_position_from_bib(x['position']))
         
         # Create tree nodes
         for cache_data in relevant_bibs:
             bib_number = cache_data['bib_number']
-            position = get_position_from_bib(bib_number)
+            position = get_position_from_bib(cache_data['position'])
+            gender = cache_data["gender"]
             
-            # Create the bib node with format [Position]. [Bib Number]
+            # Create the bib node with format [Position]. [Gender] ([Bib Number])
             if position == 999999:
-                bib_text = f"?. {bib_number}"
+                bib_text = f"?. {gender} ({bib_number})"
             else:
-                bib_text = f"{position}. {bib_number}"
+                bib_text = f"{position}. {gender} ({bib_number})"
             
             bib_node = QTreeWidgetItem(self.tree, [bib_text])
             

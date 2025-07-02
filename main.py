@@ -205,9 +205,10 @@ class RunnerViewerApp(QObject):
         self.tree_manager.set_data(self.data_manager.data)
         
         selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
         
-        self.tree_manager.populate_tree(selected_category, filter_unchecked_only)
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only)
     
     def show_entry(self, index: int) -> None:
         """Display entry at given index."""

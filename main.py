@@ -188,12 +188,12 @@ class RunnerViewerApp(QObject):
             )
             return
         
-        # Create and show the export dialog
-        dialog = ExportDialog(self.main_window)
-        
-        # Set current data and config
-        dialog.set_data(self.data_manager.data)
-        dialog.set_base_path(self.config.get("base_path", ""))
+        # Create and show the export dialog with correct parameters
+        dialog = ExportDialog(
+            self.data_manager.data, 
+            self.config.get("base_path", ""), 
+            self.main_window
+        )
         
         # Show the dialog
         dialog.exec_()

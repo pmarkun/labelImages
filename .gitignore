@@ -1,2 +1,4 @@
 train/*
 output/*
+*.pyc
+__pycache__/*

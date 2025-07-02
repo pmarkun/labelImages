@@ -345,6 +345,9 @@ class RunnerViewerApp(QObject):
         if self._is_current_checked():
             return
         
+        # Save expansion state
+        expansion_state = self.tree_manager.get_expansion_state()
+        
         bib_text = self.main_window.get_bib_number_field().text()
         
         # Save state for undo
@@ -356,7 +359,14 @@ class RunnerViewerApp(QObject):
         run_data["bib_number"] = bib_text
         
         self.mark_unsaved_changes()
-        self.populate_tree()
+        
+        # Repopulate tree with expansion state preserved
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
         self.tree_manager.select_next_tree_item()
     
     def on_category_selected(self, index: int) -> None:
@@ -366,6 +376,9 @@ class RunnerViewerApp(QObject):
         
         if self._is_current_checked():
             return
+        
+        # Save expansion state
+        expansion_state = self.tree_manager.get_expansion_state()
         
         category_text = self.main_window.get_bib_category_field().currentText()
         if not category_text:
@@ -380,7 +393,14 @@ class RunnerViewerApp(QObject):
         run_data["run_category"] = category_text
         
         self.mark_unsaved_changes()
-        self.populate_tree()
+        
+        # Repopulate tree with expansion state preserved
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
         self.tree_manager.select_next_tree_item()
     
     def on_brand_changed_immediate(self) -> None:
@@ -556,28 +576,61 @@ class RunnerViewerApp(QObject):
     
     def _remove_current_image(self) -> None:
         """Remove current image."""
+        # Save current state and expansion
+        selected_item_info = self.tree_manager.get_selected_item_info()
+        expansion_state = self.tree_manager.get_expansion_state()
+        
         self.data_manager.save_state(self.current_index)
         new_index = self.data_manager.remove_image(self.current_index)
         self.current_index = new_index
         
-        self.populate_tree()
-        self.tree_manager.select_next_tree_item()
+        # Repopulate tree with expansion state restored
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
+        # Select appropriate next item
+        if selected_item_info:
+            self.tree_manager.select_next_item_after_deletion(selected_item_info, expansion_state)
+        else:
+            self.tree_manager.select_next_tree_item()
+        
         self.mark_unsaved_changes()
         self.update_status_bar()
     
     def _remove_all_images_with_bib(self, bib_number: str) -> None:
         """Remove all images with specific bib number."""
+        # Save current state and expansion
+        selected_item_info = self.tree_manager.get_selected_item_info()
+        expansion_state = self.tree_manager.get_expansion_state()
+        
         self.data_manager.save_state(self.current_index)
         new_index = self.data_manager.remove_all_images_with_bib(bib_number)
         self.current_index = new_index
         
-        self.populate_tree()
-        self.tree_manager.select_next_tree_item()
+        # Repopulate tree with expansion state restored
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
+        # Select appropriate next item
+        if selected_item_info:
+            self.tree_manager.select_next_item_after_deletion(selected_item_info, expansion_state)
+        else:
+            self.tree_manager.select_next_tree_item()
+        
         self.mark_unsaved_changes()
         self.update_status_bar()
     
     def _keep_only_current_image(self) -> None:
         """Keep current image as master and propagate data."""
+        # Save expansion state
+        expansion_state = self.tree_manager.get_expansion_state()
+        
         self.data_manager.save_state(self.current_index)
         self.data_manager.propagate_data_to_same_bib(self.current_index)
         
@@ -590,7 +643,13 @@ class RunnerViewerApp(QObject):
                 if bib_number:
                     self.export_manager.export_shoes_for_bib(bib_number)
         
-        self.populate_tree()
+        # Repopulate tree with expansion state preserved
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
         self.show_entry(self.current_index)
         self.tree_manager.select_tree_item_by_index(self.current_index)
         self.mark_unsaved_changes()
@@ -610,6 +669,10 @@ class RunnerViewerApp(QObject):
         if self._is_current_checked():
             return
         
+        # Save expansion state and current selection
+        expansion_state = self.tree_manager.get_expansion_state()
+        current_selection_info = self.tree_manager.get_selected_item_info()
+        
         bib_number = self.main_window.get_bib_number_field().text()
         category = self.main_window.get_bib_category_field().currentText()
         checked_brands = [
@@ -622,8 +685,20 @@ class RunnerViewerApp(QObject):
         
         self.mark_unsaved_changes()
         self.update_status_bar()
-        self.populate_tree()
-        self.tree_manager.select_next_tree_item()
+        
+        # Repopulate tree with expansion state preserved
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
+        # Try to select the same item or the next appropriate one
+        if current_selection_info:
+            # For shortcuts, we want to stay on the current item if possible
+            self.tree_manager.select_tree_item_by_index(self.current_index)
+        else:
+            self.tree_manager.select_next_tree_item()
     
     def _set_brand_by_key(self, key_char: str) -> None:
         """Set brand based on key shortcut."""
@@ -638,13 +713,34 @@ class RunnerViewerApp(QObject):
         if not target_brand:
             return
         
+        # Save expansion state and current selection
+        expansion_state = self.tree_manager.get_expansion_state()
+        
         # Update brand checkboxes
         brand_checks = self.main_window.get_brand_checks()
         for chk in brand_checks:
             chk.setChecked(chk.text() == target_brand)
         
-        # Apply changes
-        self._apply_changes()
+        # Apply changes directly to maintain position
+        bib_number = self.main_window.get_bib_number_field().text()
+        category = self.main_window.get_bib_category_field().currentText()
+        checked_brands = [target_brand]  # Only the shortcut brand is selected
+        
+        self.data_manager.save_state(self.current_index)
+        self.data_manager.update_image_data(self.current_index, bib_number, category, checked_brands)
+        
+        self.mark_unsaved_changes()
+        self.update_status_bar()
+        
+        # Repopulate tree with expansion state preserved
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
+        # Stay on the current item (don't advance to next)
+        self.tree_manager.select_tree_item_by_index(self.current_index)
     
     def _get_key_to_brand_mapping(self) -> Dict[str, str]:
         """Get key to brand mapping from config."""

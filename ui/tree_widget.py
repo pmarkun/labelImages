@@ -25,7 +25,7 @@ class TreeManager(QObject):
         self.data = data
         self.cache.build_cache(data)
     
-    def populate_tree(self, selected_category: Optional[str] = None, selected_gender: Optional[str] = None, filter_unchecked_only: bool = False) -> None:
+    def populate_tree(self, selected_category: Optional[str] = None, selected_gender: Optional[str] = None, filter_unchecked_only: bool = False, restore_expansion: Optional[Dict[str, bool]] = None) -> None:
         """Populate the tree with bib numbers and images."""
         self.tree.clear()
         
@@ -91,8 +91,11 @@ class TreeManager(QObject):
             self.tree.itemExpanded.connect(self._on_tree_item_expanded)
             self._expansion_connected = True
         
-        # Keep tree collapsed by default
-        self.tree.collapseAll()
+        # Restore expansion state if provided, otherwise keep collapsed
+        if restore_expansion:
+            self.restore_expansion_state(restore_expansion)
+        else:
+            self.tree.collapseAll()
     
     def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
         """Load children when a bib node is expanded."""
@@ -252,3 +255,92 @@ class TreeManager(QObject):
                 if item_bib_number == bib_number and item.get("checked", False):
                     return True
         return False
+    
+    def get_expansion_state(self) -> Dict[str, bool]:
+        """Get the current expansion state of all bib nodes."""
+        expansion_state = {}
+        for i in range(self.tree.topLevelItemCount()):
+            bib_item = self.tree.topLevelItem(i)
+            if bib_item:
+                bib_text = bib_item.text(0)
+                expansion_state[bib_text] = bib_item.isExpanded()
+        return expansion_state
+    
+    def restore_expansion_state(self, expansion_state: Dict[str, bool]) -> None:
+        """Restore the expansion state of bib nodes."""
+        for i in range(self.tree.topLevelItemCount()):
+            bib_item = self.tree.topLevelItem(i)
+            if bib_item:
+                bib_text = bib_item.text(0)
+                if bib_text in expansion_state and expansion_state[bib_text]:
+                    bib_item.setExpanded(True)
+    
+    def get_selected_item_info(self) -> Optional[Dict[str, Any]]:
+        """Get information about the currently selected item."""
+        current_item = self.tree.currentItem()
+        if not current_item:
+            return None
+        
+        # Check if it's a child item (image)
+        parent = current_item.parent()
+        if parent:
+            return {
+                'type': 'image',
+                'bib_text': parent.text(0),
+                'image_name': current_item.text(0),
+                'data_index': current_item.data(0, Qt.UserRole)
+            }
+        else:
+            return {
+                'type': 'bib',
+                'bib_text': current_item.text(0),
+                'data_index': current_item.data(0, Qt.UserRole)
+            }
+    
+    def select_next_item_after_deletion(self, deleted_item_info: Dict[str, Any], expansion_state: Dict[str, bool]) -> None:
+        """Select the next appropriate item after deletion, maintaining expansion state."""
+        # First restore expansion state
+        self.restore_expansion_state(expansion_state)
+        
+        if deleted_item_info['type'] == 'image':
+            # If we deleted an image, try to select next image in same bib
+            bib_text = deleted_item_info['bib_text']
+            bib_item = self._find_bib_item_by_text(bib_text)
+            
+            if bib_item:
+                # Ensure the bib item is expanded if it was before
+                if bib_text in expansion_state and expansion_state[bib_text]:
+                    bib_item.setExpanded(True)
+                
+                if bib_item.childCount() > 0:
+                    # Select first child image
+                    first_child = bib_item.child(0)
+                    if first_child:
+                        self.tree.setCurrentItem(first_child)
+                        return
+                else:
+                    # If no children, select the bib item itself
+                    self.tree.setCurrentItem(bib_item)
+                    return
+        elif deleted_item_info['type'] == 'bib':
+            # If we deleted a whole bib, find the next bib item
+            for i in range(self.tree.topLevelItemCount()):
+                item = self.tree.topLevelItem(i)
+                if item:
+                    self.tree.setCurrentItem(item)
+                    # Restore expansion for this item if it was expanded
+                    item_text = item.text(0)
+                    if item_text in expansion_state and expansion_state[item_text]:
+                        item.setExpanded(True)
+                    return
+        
+        # Fallback: select next available item
+        self.select_next_tree_item()
+    
+    def _find_bib_item_by_text(self, bib_text: str) -> Optional[QTreeWidgetItem]:
+        """Find a bib item by its text."""
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item and item.text(0) == bib_text:
+                return item
+        return None

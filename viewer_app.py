@@ -279,6 +279,23 @@ class RunnerViewer(QMainWindow):
         self.tree.installEventFilter(self)
         layout.addWidget(self.tree)
         
+        # Statistics box
+        stats_group = QGroupBox("Estatísticas de Marcas")
+        stats_layout = QVBoxLayout(stats_group)
+        
+        # Create scrollable area for statistics
+        stats_scroll = QScrollArea()
+        stats_scroll.setWidgetResizable(True)
+        stats_scroll.setMaximumHeight(400)
+        
+        self.stats_label = QLabel()
+        self.stats_label.setStyleSheet("font-size: 11px; color: #333; padding: 5px;")
+        self.stats_label.setWordWrap(True)
+        stats_scroll.setWidget(self.stats_label)
+        
+        stats_layout.addWidget(stats_scroll)
+        layout.addWidget(stats_group)
+        
         return panel
         
     def create_center_panel(self) -> QWidget:
@@ -457,6 +474,7 @@ class RunnerViewer(QMainWindow):
         
         self.collect_stats()
         self.populate_tree()
+        self.calculate_brand_statistics()
         self.show_entry(0)
         self.update_status_bar()
         self.update_window_title()
@@ -968,6 +986,7 @@ class RunnerViewer(QMainWindow):
             self.current_index = -1
         
         self.populate_tree()
+        self.calculate_brand_statistics()
         if self.current_index >= 0 and self.current_index < len(self.data):
             self.show_entry(self.current_index)
             # Update tree selection to match current index
@@ -1103,6 +1122,7 @@ class RunnerViewer(QMainWindow):
         self.export_current_shoes()
         
         self.populate_tree()
+        self.calculate_brand_statistics()
         self.show_entry(self.current_index)
         # Ensure tree selection stays on current item
         self.select_tree_item_by_index(self.current_index)
@@ -1122,6 +1142,7 @@ class RunnerViewer(QMainWindow):
         current_item['checked'] = not current_checked
         
         self.mark_unsaved_changes()
+        self.calculate_brand_statistics()
         self.update_status_bar()
         
         # Atualiza a visualização para mostrar o status
@@ -1334,6 +1355,9 @@ class RunnerViewer(QMainWindow):
         self.populate_tree()
         self.select_tree_item_by_index(self.current_index)
         
+        # Update statistics
+        self.calculate_brand_statistics()
+        
         self.mark_unsaved_changes()
         self.update_status_bar()
 
@@ -1446,6 +1470,8 @@ class RunnerViewer(QMainWindow):
         self.mark_unsaved_changes()
         # Refresh the shoe display to show updated brands
         self.show_entry(self.current_index)
+        # Update statistics
+        self.calculate_brand_statistics()
 
     def adjust_shoe_container_size(self):
         """Adjust the shoe container size to fit all shoes without scroll bars"""
@@ -1644,6 +1670,93 @@ class RunnerViewer(QMainWindow):
                 if item_bib_number == bib_number and item.get("checked", False):
                     return True
         return False
+
+    def calculate_brand_statistics(self) -> None:
+        """Calculate and display brand distribution statistics"""
+        if not self.data:
+            if hasattr(self, 'stats_label'):
+                self.stats_label.setText("Nenhum dado carregado")
+            return
+        
+        # Count brands in all images and checked images
+        brand_counts_total = {}
+        brand_counts_checked = {}
+        
+        total_images = len(self.data)
+        checked_images = 0
+        
+        for item in self.data:
+            is_checked = item.get('checked', False)
+            if is_checked:
+                checked_images += 1
+            
+            # Get brands from shoes
+            shoes = item.get("shoes", [])
+            image_brands = set()  # Use set to avoid counting same brand multiple times per image
+            
+            for shoe in shoes:
+                # Support both old and new format for shoe brands
+                brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
+                if brand and brand.strip():
+                    image_brands.add(brand.strip())
+            
+            # Count each brand found in this image
+            for brand in image_brands:
+                # Count in total
+                brand_counts_total[brand] = brand_counts_total.get(brand, 0) + 1
+                
+                # Count in checked if this image is checked
+                if is_checked:
+                    brand_counts_checked[brand] = brand_counts_checked.get(brand, 0) + 1
+        
+        # Sort brands by total count (descending)
+        sorted_brands = sorted(brand_counts_total.items(), key=lambda x: x[1], reverse=True)
+        
+        # Take top 9 brands and group the rest as "Outras"
+        top_brands = sorted_brands[:9]
+        other_brands = sorted_brands[9:]
+        
+        # Calculate "Outras" counts
+        outras_total = sum(count for _, count in other_brands)
+        outras_checked = sum(brand_counts_checked.get(brand, 0) for brand, _ in other_brands)
+        
+        # Build statistics text
+        stats_text = "<b>Distribuição de Marcas:</b><br><br>"
+        stats_text += "<table style='width: 100%; border-collapse: collapse;'>"
+        stats_text += "<tr style='background-color: #f0f0f0; font-weight: bold;'>"
+        stats_text += "<td style='padding: 3px; border: 1px solid #ddd;'>Marca</td>"
+        stats_text += "<td style='padding: 3px; border: 1px solid #ddd;'>Total (%)</td>"
+        stats_text += "<td style='padding: 3px; border: 1px solid #ddd;'>Checadas (%)</td>"
+        stats_text += "</tr>"
+        
+        # Add top brands
+        for brand, total_count in top_brands:
+            checked_count = brand_counts_checked.get(brand, 0)
+            total_percent = (total_count / total_images * 100) if total_images > 0 else 0
+            checked_percent = (checked_count / checked_images * 100) if checked_images > 0 else 0
+            
+            stats_text += f"<tr>"
+            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{brand}</td>"
+            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{total_count} ({total_percent:.1f}%)</td>"
+            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{checked_count} ({checked_percent:.1f}%)</td>"
+            stats_text += f"</tr>"
+        
+        # Add "Outras" if there are other brands
+        if outras_total > 0:
+            total_percent = (outras_total / total_images * 100) if total_images > 0 else 0
+            checked_percent = (outras_checked / checked_images * 100) if checked_images > 0 else 0
+            
+            stats_text += f"<tr style='background-color: #f8f9fa;'>"
+            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'><i>Outras</i></td>"
+            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{outras_total} ({total_percent:.1f}%)</td>"
+            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{outras_checked} ({checked_percent:.1f}%)</td>"
+            stats_text += f"</tr>"
+        
+        stats_text += "</table>"
+        stats_text += f"<br><small>Total de imagens: {total_images} | Checadas: {checked_images}</small>"
+        
+        if hasattr(self, 'stats_label'):
+            self.stats_label.setText(stats_text)
 
 def main() -> None:
     app = QApplication(sys.argv)

@@ -1,4 +1,5 @@
 base_path: '/home/markun/devel/storage/olympikus'
+output_folder: 'train'
 labels:
 - key: q
   label: Olympikus

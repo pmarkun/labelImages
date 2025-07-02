@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import QApplication, QCheckBox, QTreeWidgetItem, QMessageBo
 
 from ui.main_window import RunnerViewerMainWindow
 from ui.tree_widget import TreeManager
-from ui.fast_image_display import FastImageDisplayManager
+from ui.hybrid_image_display import HybridImageDisplayManager
 from ui.image_display import ExportManager
 from ui.export_dialog import ExportDialog
 from core.data_manager import DataManager
@@ -51,7 +51,7 @@ class RunnerViewerApp(QObject):
         self.data_manager = DataManager()
         self.main_window = RunnerViewerMainWindow()
         self.tree_manager = TreeManager(self.main_window.get_tree_widget())
-        self.image_display = FastImageDisplayManager(
+        self.image_display = HybridImageDisplayManager(
             self.main_window.get_thumb_label(),
             self.main_window.get_runner_label(),
             self.main_window.get_shoe_container(),

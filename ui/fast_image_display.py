@@ -76,12 +76,20 @@ class FastImageDisplayManager:
             self._process_and_display(img, data_item, img_path)
     
     def _get_cache_key(self, img_path: str, data_item: Dict[str, Any]) -> str:
-        """Generate cache key for components."""
+        """Generate cache key for components including size information."""
+        # Include container sizes in cache key for proper zoom caching
+        container_height = self.shoe_container.height() if self.shoe_container.height() > 0 else 400
+        runner_width = self.runner_label.width() if self.runner_label.width() > 0 else 400
+        runner_height = self.runner_label.height() if self.runner_label.height() > 0 else 600
+        
         # Use hash of relevant data for cache key
         data_hash = hash(str({
             'bib': data_item.get('bib', {}),
             'shoes': data_item.get('shoes', []),
-            'bbox': data_item.get('bbox')
+            'bbox': data_item.get('bbox'),
+            'container_height': container_height,
+            'runner_width': runner_width,
+            'runner_height': runner_height
         }))
         return f"{img_path}_{data_hash}"
     
@@ -140,53 +148,100 @@ class FastImageDisplayManager:
             self._show_error_state()
     
     def _create_components_fast(self, img: Image.Image, data_item: Dict[str, Any]) -> Dict[str, Any]:
-        """Create all components with minimal processing."""
-        # Use minimal image processing for speed
+        """Create all components with optimal processing and proper zoom."""
+        # Use cached image processing for bounding boxes
         img_with_boxes = draw_bounding_boxes(img, data_item)
         
-        # Thumbnail - small and fast
-        thumb_size = (120, int(120 * img.height / img.width))
-        thumb_img = img_with_boxes.resize(thumb_size, Image.Resampling.NEAREST)  # Fastest resize
+        # Thumbnail - small but with good quality
+        thumb_target_width = 150
+        thumb_height = int(thumb_target_width * img.height / img.width)
+        thumb_img = img_with_boxes.resize((thumb_target_width, thumb_height), Image.Resampling.LANCZOS)
         thumb_pixmap = pil_to_qpixmap(thumb_img)
         
-        # Runner - medium size
+        # Runner - with proper zoom calculation
         bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, img.width, img.height])
         runner_crop = crop_image(img_with_boxes, bbox)
         
-        # Fast resize calculation
-        target_size = min(300, max(runner_crop.width, runner_crop.height))
-        if runner_crop.width > runner_crop.height:
-            runner_size = (target_size, int(target_size * runner_crop.height / runner_crop.width))
-        else:
-            runner_size = (int(target_size * runner_crop.width / runner_crop.height), target_size)
+        # Smart zoom calculation for runner - maintain aspect ratio and fill available space
+        target_width = self.runner_label.width() if self.runner_label.width() > 0 else 400
+        target_height = self.runner_label.height() if self.runner_label.height() > 0 else 600
         
-        runner_img = runner_crop.resize(runner_size, Image.Resampling.NEAREST)
+        # Calculate scale to fit in available space with padding
+        scale_x = (target_width * 0.95) / runner_crop.width if runner_crop.width > 0 else 1
+        scale_y = (target_height * 0.95) / runner_crop.height if runner_crop.height > 0 else 1
+        scale = min(scale_x, scale_y, 3.0)  # Max 3x zoom
+        scale = max(scale, 0.1)  # Min scale to avoid tiny images
+        
+        runner_width = max(int(runner_crop.width * scale), 50)
+        runner_height = max(int(runner_crop.height * scale), 50)
+        
+        runner_img = runner_crop.resize((runner_width, runner_height), Image.Resampling.LANCZOS)
         runner_pixmap = pil_to_qpixmap(runner_img)
         
-        # Shoes - create minimal info for fast rendering
-        shoes_data = []
-        for shoe_index, shoe in enumerate(data_item.get("shoes", [])):
-            shoe_bbox = shoe.get("bbox")
-            if shoe_bbox and len(shoe_bbox) >= 4:
-                # Create small shoe crop
-                shoe_crop = crop_image(img, shoe_bbox)
-                shoe_size = (80, int(80 * shoe_crop.height / shoe_crop.width)) if shoe_crop.width > 0 else (80, 80)
-                shoe_img = shoe_crop.resize(shoe_size, Image.Resampling.NEAREST)
-                shoe_pixmap = pil_to_qpixmap(shoe_img)
-                
-                brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
-                
-                shoes_data.append({
-                    'pixmap': shoe_pixmap,
-                    'brand': brand,
-                    'index': shoe_index
-                })
+        # Shoes - with intelligent sizing based on container
+        shoes_data = self._create_shoes_with_smart_zoom(img, data_item)
         
         return {
             'thumb_pixmap': thumb_pixmap,
             'runner_pixmap': runner_pixmap,
             'shoes_data': shoes_data
         }
+    
+    def _create_shoes_with_smart_zoom(self, img: Image.Image, data_item: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Create shoe widgets with intelligent zoom based on container size."""
+        shoes_data = []
+        shoes = data_item.get("shoes", [])
+        
+        if not shoes:
+            return shoes_data
+        
+        # Calculate available space per shoe
+        container_height = self.shoe_container.height() if self.shoe_container.height() > 0 else 400
+        container_width = 270
+        
+        num_shoes = len(shoes)
+        label_height = 20
+        widget_margins = 10
+        layout_spacing = 5 * max(0, num_shoes - 1)
+        total_reserved_height = num_shoes * (label_height + widget_margins) + layout_spacing + 30
+        
+        available_height_per_shoe = max((container_height - total_reserved_height) / num_shoes, 60)
+        available_width = container_width - 20
+        
+        for shoe_index, shoe in enumerate(shoes):
+            shoe_bbox = shoe.get("bbox")
+            if shoe_bbox and len(shoe_bbox) >= 4:
+                try:
+                    # Create shoe crop
+                    shoe_crop = crop_image(img, shoe_bbox)
+                    
+                    # Smart scaling for shoes
+                    if shoe_crop.width > 0 and shoe_crop.height > 0:
+                        # Calculate scaling to fit available space
+                        height_ratio = available_height_per_shoe / shoe_crop.height
+                        width_ratio = available_width / shoe_crop.width
+                        shoe_scale = min(height_ratio, width_ratio, 4.0)  # Max 4x zoom for shoes
+                        shoe_scale = max(shoe_scale, 0.2)  # Min scale
+                        
+                        new_width = max(int(shoe_crop.width * shoe_scale), 60)
+                        new_height = max(int(shoe_crop.height * shoe_scale), 40)
+                        
+                        # Use high quality resize for shoes since they're small
+                        shoe_img = shoe_crop.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        shoe_pixmap = pil_to_qpixmap(shoe_img)
+                        
+                        brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
+                        
+                        shoes_data.append({
+                            'pixmap': shoe_pixmap,
+                            'brand': brand,
+                            'index': shoe_index
+                        })
+                        
+                except Exception as e:
+                    print(f"Error processing shoe {shoe_index}: {e}")
+        
+        return shoes_data
     
     def _apply_cached_components(self, cache_key: str, is_checked: bool):
         """Apply cached components to UI."""
@@ -287,7 +342,36 @@ class FastImageDisplayManager:
         
         if paths:
             self._lazy_cache.preload(paths, priority=5)
-
+    
+    def invalidate_cache_on_resize(self):
+        """Invalidate cache when container sizes change."""
+        # Call this when the window is resized to recalculate zoom levels
+        self._component_cache.clear()
+    
+    def get_zoom_info(self, data_item: Dict[str, Any]) -> Dict[str, Any]:
+        """Get zoom information for debugging."""
+        if not data_item:
+            return {}
+        
+        bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, 100, 100])
+        crop_width = bbox[2] - bbox[0] if len(bbox) >= 4 else 100
+        crop_height = bbox[3] - bbox[1] if len(bbox) >= 4 else 100
+        
+        target_width = self.runner_label.width() if self.runner_label.width() > 0 else 400
+        target_height = self.runner_label.height() if self.runner_label.height() > 0 else 600
+        
+        scale_x = (target_width * 0.95) / crop_width if crop_width > 0 else 1
+        scale_y = (target_height * 0.95) / crop_height if crop_height > 0 else 1
+        scale = min(scale_x, scale_y, 3.0)
+        scale = max(scale, 0.1)
+        
+        return {
+            'crop_size': (crop_width, crop_height),
+            'target_size': (target_width, target_height),
+            'scale_factor': scale,
+            'final_size': (int(crop_width * scale), int(crop_height * scale))
+        }
+        
 
 # Keep old class for compatibility
 ImageDisplayManager = FastImageDisplayManager

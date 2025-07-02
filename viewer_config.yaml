@@ -30,4 +30,4 @@ labels:
 - key: z
   label: Outros
 output_folder: train
-shoes_confidence_threshold: 0.7
+shoes_confidence_threshold: 0.45

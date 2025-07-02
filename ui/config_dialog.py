@@ -52,11 +52,18 @@ class ConfigurationDialog(QDialog):
         
         # Add description
         description = QLabel(
-            "Os thresholds de confiança determinam o nível mínimo de "
-            "confiança necessário para exibir as detecções de placa de peito e tênis."
+            "<b>Thresholds de Confiança:</b><br><br>"
+            "<b>• Confiança da Placa de Peito:</b> Define o nível mínimo de confiança "
+            "para aceitar detecções de dorsais/placas de peito.<br><br>"
+            "<b>• Confiança dos Tênis:</b> Define o nível mínimo de confiança para "
+            "aceitar tanto a <i>detecção</i> quanto a <i>classificação da marca</i> dos tênis. "
+            "Ambos os valores devem estar acima do threshold.<br><br>"
+            "<small>⚠️ Valores mais altos = mais rigoroso (menos detecções, maior precisão)<br>"
+            "Valores mais baixos = menos rigoroso (mais detecções, menor precisão)</small>"
         )
         description.setWordWrap(True)
-        description.setStyleSheet("color: #666; font-size: 11px; margin: 10px 0;")
+        description.setStyleSheet("color: #444; font-size: 11px; margin: 10px 5px; padding: 8px; "
+                                "background-color: #f0f8ff; border: 1px solid #cce7ff; border-radius: 4px;")
         layout.addWidget(description)
         
         # Buttons

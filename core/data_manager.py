@@ -17,10 +17,13 @@ class DataManager:
         self.undo_stack: List[Dict[str, Any]] = []
         self.max_undo = 50
         
-    def load_json(self, file_path: str) -> None:
-        """Load data from JSON file."""
+    def load_json(self, file_path: str, chest_plate_threshold: float = 0.5, shoes_threshold: float = 0.5) -> None:
+        """Load data from JSON file and apply confidence thresholds."""
         with open(file_path, "r", encoding="utf-8") as f:
-            self.data = json.load(f)
+            raw_data = json.load(f)
+        
+        # Apply thresholds to filter data
+        self.data = self._apply_confidence_filters(raw_data, chest_plate_threshold, shoes_threshold)
         self.cache.build_cache(self.data)
         self.undo_stack = []
     
@@ -263,3 +266,46 @@ class DataManager:
                 if item_bib_number == bib_number and item.get("checked", False):
                     return True
         return False
+    
+    def _apply_confidence_filters(self, raw_data: List[Dict[str, Any]], 
+                                 chest_plate_threshold: float, 
+                                 shoes_threshold: float) -> List[Dict[str, Any]]:
+        """Apply confidence thresholds to filter data."""
+        filtered_data = []
+        
+        for item in raw_data:
+            # Create a copy of the item to avoid modifying original data
+            filtered_item = copy.deepcopy(item)
+            
+            # Filter shoes based on detection and classification confidence
+            if "shoes" in filtered_item:
+                filtered_shoes = []
+                for shoe in filtered_item["shoes"]:
+                    classification_conf = shoe.get("classification_confidence", 0.0)
+                    
+                    # Keep shoe if both detection and classification confidence meet threshold
+                    if classification_conf >= shoes_threshold:
+                        filtered_shoes.append(shoe)
+                
+                filtered_item["shoes"] = filtered_shoes
+            
+            # Filter bib/chest plate data based on confidence
+            if "bib" in filtered_item.get('run_data', {}) and isinstance(filtered_item.get("run_data",{}).get('bib'), dict):
+                bib_conf = filtered_item["bib"].get("confidence", 0.0)
+                
+                # Remove bib data if confidence is below threshold
+                if bib_conf < chest_plate_threshold:
+                    filtered_item["bib"] = {}
+            
+            # Only include items that have at least one shoe or valid bib data
+            has_valid_shoes = len(filtered_item.get("shoes", [])) > 0
+            has_valid_bib = bool(filtered_item.get("bib", {}))
+            
+            if has_valid_shoes or has_valid_bib:
+                filtered_data.append(filtered_item)
+        
+        return filtered_data
+    
+    def reload_with_thresholds(self, file_path: str, chest_plate_threshold: float, shoes_threshold: float) -> None:
+        """Reload data with new confidence thresholds."""
+        self.load_json(file_path, chest_plate_threshold, shoes_threshold)

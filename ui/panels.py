@@ -213,7 +213,17 @@ class RightPanel(QWidget):
     
     def setup_shortcuts_info(self, config_labels: List[dict]) -> None:
         """Setup keyboard shortcuts information display."""
-        # Find existing shortcuts group or create new one
+        # Remove existing shortcuts group if it exists
+        layout = self.layout()
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item and item.widget():
+                widget = item.widget()
+                if isinstance(widget, QGroupBox) and widget.title() == "Atalhos de Teclado":
+                    widget.deleteLater()
+                    break
+        
+        # Create new shortcuts group
         shortcuts_group = QGroupBox("Atalhos de Teclado")
         shortcuts_layout = QVBoxLayout(shortcuts_group)
         
@@ -247,5 +257,5 @@ class RightPanel(QWidget):
         shortcuts_text.setWordWrap(True)
         shortcuts_layout.addWidget(shortcuts_text)
         
-        # Add to layout if not already present
-        self.layout().addWidget(shortcuts_group)
+        # Add to layout
+        layout.addWidget(shortcuts_group)

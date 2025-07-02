@@ -103,7 +103,12 @@ class RunnerViewer(RunnerViewerMainWindow):
         """Load JSON data file using the data manager."""
         try:
             self.json_path = path
-            self.data_manager.load_json(path)
+            
+            # Get current thresholds from config
+            chest_plate_threshold = self.config.get('chest_plate_confidence_threshold', 0.5)
+            shoes_threshold = self.config.get('shoes_confidence_threshold', 0.5)
+            
+            self.data_manager.load_json(path, chest_plate_threshold, shoes_threshold)
             
             # Clear undo stack and reset state
             self.has_unsaved_changes = False
@@ -1070,11 +1075,24 @@ class RunnerViewer(RunnerViewerMainWindow):
 
     def open_configuration_dialog(self) -> None:
         """Open the configuration dialog to adjust settings."""
+        # Store original thresholds to detect changes
+        original_chest_threshold = self.config.get('chest_plate_confidence_threshold', 0.5)
+        original_shoes_threshold = self.config.get('shoes_confidence_threshold', 0.5)
+        
         # Create and show the configuration dialog
         dialog = ConfigurationDialog(self.config, self)
         if dialog.exec_() == dialog.Accepted:
             # Get the updated configuration
             updated_config = dialog.get_updated_config()
+            
+            # Check if thresholds changed
+            new_chest_threshold = updated_config.get('chest_plate_confidence_threshold', 0.5)
+            new_shoes_threshold = updated_config.get('shoes_confidence_threshold', 0.5)
+            
+            thresholds_changed = (
+                original_chest_threshold != new_chest_threshold or 
+                original_shoes_threshold != new_shoes_threshold
+            )
             
             # Update the current configuration
             self.config.update(updated_config)
@@ -1082,7 +1100,50 @@ class RunnerViewer(RunnerViewerMainWindow):
             # Save the configuration to YAML file
             try:
                 save_config(self.config_path, self.config)
+                
+                # If thresholds changed and we have data loaded, reload it
+                if thresholds_changed and self.json_path and self.data_manager.data:
+                    reply = QMessageBox.question(
+                        self,
+                        "Recarregar Dados",
+                        "Os thresholds de confiança foram alterados. Deseja recarregar os dados "
+                        "para aplicar os novos filtros?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    
+                    if reply == QMessageBox.Yes:
+                        # Save current state before reloading
+                        current_item = self.get_tree_widget().currentItem()
+                        current_index = 0
+                        if current_item:
+                            current_index = current_item.data(0, Qt.UserRole) or 0
+                        
+                        # Reload data with new thresholds
+                        self.data_manager.reload_with_thresholds(
+                            self.json_path, new_chest_threshold, new_shoes_threshold
+                        )
+                        
+                        # Refresh UI
+                        self.collect_stats()
+                        self.populate_tree()
+                        
+                        # Try to restore previous selection or go to first item
+                        if current_index < len(self.data_manager.data):
+                            self.show_entry(current_index)
+                        else:
+                            self.show_entry(0)
+                        
+                        self.update_status_bar()
+                        QMessageBox.information(
+                            self,
+                            "Dados Recarregados",
+                            f"Dados recarregados com os novos thresholds:\n"
+                            f"• Placa de Peito: {new_chest_threshold:.2f}\n"
+                            f"• Tênis: {new_shoes_threshold:.2f}"
+                        )
+                        
                 self.mark_unsaved_changes()  # Mark as having changes that might affect display
+                
             except Exception as e:
                 QMessageBox.critical(
                     self, 

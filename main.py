@@ -5,7 +5,7 @@ import os
 import sys
 import copy
 from typing import List, Dict, Any, Optional
-from PyQt5.QtCore import QEvent, QObject, Qt
+from PyQt5.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt5.QtGui import QKeyEvent
 from PyQt5.QtWidgets import QApplication, QCheckBox, QTreeWidgetItem, QMessageBox
 
@@ -15,6 +15,7 @@ from ui.image_display import ImageDisplayManager, ExportManager
 from ui.export_dialog import ExportDialog
 from core.data_manager import DataManager
 from utils.config import load_config, save_config
+from utils.image_utils import clear_image_cache
 
 
 DEFAULT_VIEWER_CONFIG = {
@@ -65,6 +66,12 @@ class RunnerViewerApp(QObject):
         
         # Set shoe click callback
         self.image_display.set_shoe_click_callback(self._on_shoe_click)
+        
+        # Setup filter debouncing
+        self._filter_timer = QTimer()
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.timeout.connect(self._perform_filter_update)
+        self._filter_timer.setInterval(150)  # 150ms delay
     
     def _connect_signals(self) -> None:
         """Connect all UI signals to their handlers."""
@@ -95,6 +102,11 @@ class RunnerViewerApp(QObject):
         """Load JSON data file."""
         try:
             self.json_path = path
+            
+            # Clear image caches before loading new data
+            clear_image_cache()
+            self.image_display.clear_cache()
+            
             self.data_manager.load_json(path)
             
             # Clear undo stack and reset flags
@@ -349,7 +361,12 @@ class RunnerViewerApp(QObject):
     
     # Event handlers
     def on_filter_changed(self) -> None:
-        """Handle filter changes."""
+        """Handle filter changes with debouncing."""
+        # Use timer to debounce filter changes
+        self._filter_timer.start()
+    
+    def _perform_filter_update(self) -> None:
+        """Perform the actual filter update after debouncing."""
         if self.data_manager.data:
             # Note: For filter changes, we intentionally don't preserve expansion
             # because the user is changing what's displayed, so collapsing makes sense

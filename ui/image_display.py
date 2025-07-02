@@ -2,12 +2,12 @@
 Image display and management for the Runner Viewer application.
 """
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from PIL import Image
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QMessageBox, QSizePolicy
 from .widgets import ClickableLabel
-from utils.image_utils import crop_image, pil_to_qpixmap, draw_bounding_boxes
+from utils.image_utils import crop_image, pil_to_qpixmap, draw_bounding_boxes, load_image_cached
 
 
 class ImageDisplayManager:
@@ -20,6 +20,17 @@ class ImageDisplayManager:
         self.shoe_container = shoe_container
         self.shoe_layout = shoe_layout
         self.shoe_click_callback = None
+        
+        # Cache for resized images to avoid repeated processing
+        self._thumbnail_cache = {}
+        self._runner_cache = {}
+        self._shoe_cache = {}
+    
+    def clear_cache(self):
+        """Clear all display caches."""
+        self._thumbnail_cache.clear()
+        self._runner_cache.clear()
+        self._shoe_cache.clear()
     
     def set_shoe_click_callback(self, callback) -> None:
         """Set the callback for shoe clicks."""
@@ -38,28 +49,38 @@ class ImageDisplayManager:
         img_path = os.path.join(base_path, img_filename)
         
         try:
-            img = Image.open(img_path)
+            img = load_image_cached(img_path)  # Use cached loading
         except Exception:
             print("Imagem não encontrada")
             return
         
         # Display thumbnail
-        self._display_thumbnail(img, is_checked, data_item)
+        self._display_thumbnail(img, is_checked, data_item, img_path)
         
         # Display runner crop
-        self._display_runner(img, data_item)
+        self._display_runner(img, data_item, img_path)
         
         # Display shoes
-        self._display_shoes(img, data_item)
+        self._display_shoes(img, data_item, img_path)
     
-    def _display_thumbnail(self, img: Image.Image, is_checked: bool, data_item: Dict[str, Any]) -> None:
+    def _display_thumbnail(self, img: Image.Image, is_checked: bool, data_item: Dict[str, Any], img_path: Optional[str] = None) -> None:
         """Display the thumbnail image with bounding boxes."""
-        # Draw bounding boxes on the image
-        img_with_boxes = draw_bounding_boxes(img, data_item)
+        # Create cache key
+        cache_key = f"thumb_{img_path}_{is_checked}_{hash(str(data_item.get('bib', {})))}"
         
-        # Resize for thumbnail
-        thumb_img = img_with_boxes.resize((150, int(150 * img_with_boxes.height / img_with_boxes.width)))
-        thumb_pixmap = pil_to_qpixmap(thumb_img)
+        if cache_key in self._thumbnail_cache:
+            thumb_pixmap = self._thumbnail_cache[cache_key]
+        else:
+            # Draw bounding boxes on the image
+            img_with_boxes = draw_bounding_boxes(img, data_item)
+            
+            # Resize for thumbnail
+            thumb_img = img_with_boxes.resize((150, int(150 * img_with_boxes.height / img_with_boxes.width)), Image.Resampling.LANCZOS)
+            thumb_pixmap = pil_to_qpixmap(thumb_img)
+            
+            # Cache if not too large
+            if len(self._thumbnail_cache) < 10:
+                self._thumbnail_cache[cache_key] = thumb_pixmap
         
         # Apply style based on checked status
         if is_checked:
@@ -73,26 +94,40 @@ class ImageDisplayManager:
         
         self.thumb_label.setPixmap(thumb_pixmap)
     
-    def _display_runner(self, img: Image.Image, data_item: Dict[str, Any]) -> None:
+    def _display_runner(self, img: Image.Image, data_item: Dict[str, Any], img_path: Optional[str] = None) -> None:
         """Display the runner crop with bounding boxes."""
-        # Draw bounding boxes on the full image first
-        img_with_boxes = draw_bounding_boxes(img, data_item)
-        
-        # Then crop the runner area
+        # Create cache key
         bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, img.width, img.height])
-        runner = crop_image(img_with_boxes, bbox)
+        cache_key = f"runner_{img_path}_{hash(str(bbox))}_{self.runner_label.width()}_{self.runner_label.height()}"
         
-        # Calculate proportional resize
-        target_width, target_height = self.runner_label.width(), self.runner_label.height()
-        width_ratio = target_width / runner.width * 0.95
-        height_ratio = target_height / runner.height * 0.95
-        scale_ratio = min(width_ratio, height_ratio)
+        if cache_key in self._runner_cache:
+            runner_pixmap = self._runner_cache[cache_key]
+        else:
+            # Draw bounding boxes on the full image first
+            img_with_boxes = draw_bounding_boxes(img, data_item)
+            
+            # Then crop the runner area
+            runner = crop_image(img_with_boxes, bbox)
+            
+            # Calculate proportional resize
+            target_width, target_height = self.runner_label.width(), self.runner_label.height()
+            if target_width > 0 and target_height > 0:
+                width_ratio = target_width / runner.width * 0.95
+                height_ratio = target_height / runner.height * 0.95
+                scale_ratio = min(width_ratio, height_ratio)
+                
+                runner_img = runner.resize((int(runner.width * scale_ratio), int(runner.height * scale_ratio)), Image.Resampling.LANCZOS)
+                runner_pixmap = pil_to_qpixmap(runner_img)
+                
+                # Cache if not too large
+                if len(self._runner_cache) < 10:
+                    self._runner_cache[cache_key] = runner_pixmap
+            else:
+                runner_pixmap = pil_to_qpixmap(runner)
         
-        runner_img = runner.resize((int(runner.width * scale_ratio), int(runner.height * scale_ratio)))
-        runner_pixmap = pil_to_qpixmap(runner_img)
         self.runner_label.setPixmap(runner_pixmap)
     
-    def _display_shoes(self, img: Image.Image, data_item: Dict[str, Any]) -> None:
+    def _display_shoes(self, img: Image.Image, data_item: Dict[str, Any], img_path: Optional[str] = None) -> None:
         """Display all shoes from the image."""
         # Clear existing shoes
         for i in reversed(range(self.shoe_layout.count())):
@@ -129,20 +164,30 @@ class ImageDisplayManager:
             shoe_bbox = shoe.get("bbox")
             if shoe_bbox and len(shoe_bbox) >= 4:
                 try:
-                    crop = crop_image(img, shoe_bbox)
+                    # Create cache key for this shoe
+                    shoe_cache_key = f"shoe_{img_path}_{shoe_index}_{hash(str(shoe_bbox))}_{available_height_per_shoe}_{available_width}"
                     
-                    # Calculate scaling
-                    height_ratio = available_height_per_shoe / crop.height if crop.height > 0 else 1
-                    width_ratio = available_width / crop.width if crop.width > 0 else 1
-                    shoe_ratio = min(height_ratio, width_ratio, 2.0)
-                    shoe_ratio = max(shoe_ratio, 0.2)
-                    shoe_ratio = min(shoe_ratio, 3.0)
-                    
-                    new_width = max(int(crop.width * shoe_ratio), 60)
-                    new_height = max(int(crop.height * shoe_ratio), 40)
-                    
-                    shoe_img = crop.resize((new_width, new_height))
-                    shoe_pixmap = pil_to_qpixmap(shoe_img)
+                    if shoe_cache_key in self._shoe_cache:
+                        shoe_pixmap = self._shoe_cache[shoe_cache_key]
+                    else:
+                        crop = crop_image(img, shoe_bbox)
+                        
+                        # Calculate scaling
+                        height_ratio = available_height_per_shoe / crop.height if crop.height > 0 else 1
+                        width_ratio = available_width / crop.width if crop.width > 0 else 1
+                        shoe_ratio = min(height_ratio, width_ratio, 2.0)
+                        shoe_ratio = max(shoe_ratio, 0.2)
+                        shoe_ratio = min(shoe_ratio, 3.0)
+                        
+                        new_width = max(int(crop.width * shoe_ratio), 60)
+                        new_height = max(int(crop.height * shoe_ratio), 40)
+                        
+                        shoe_img = crop.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        shoe_pixmap = pil_to_qpixmap(shoe_img)
+                        
+                        # Cache if not too large
+                        if len(self._shoe_cache) < 20:
+                            self._shoe_cache[shoe_cache_key] = shoe_pixmap
                     
                     # Create shoe widget container
                     shoe_widget = QWidget()
@@ -154,14 +199,14 @@ class ImageDisplayManager:
                     if brand:
                         brand_lbl = QLabel(brand)
                         brand_lbl.setStyleSheet("font-size: 11px; color: #666; font-weight: bold;")
-                        brand_lbl.setAlignment(Qt.AlignCenter)
+                        brand_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         shoe_layout.addWidget(brand_lbl)
                     
                     # Create clickable shoe label
                     lbl = ClickableLabel(shoe_index=shoe_index, callback=self.shoe_click_callback)
                     lbl.setPixmap(shoe_pixmap)
                     lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px; cursor: pointer;")
-                    lbl.setAlignment(Qt.AlignCenter)
+                    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     
                     shoe_layout.addWidget(lbl)
                     shoe_layout.addStretch()

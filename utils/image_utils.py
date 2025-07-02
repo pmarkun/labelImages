@@ -2,11 +2,54 @@
 Image processing utilities.
 """
 import io
+import hashlib
+from functools import lru_cache
 from typing import List, Dict, Any, Tuple
 from PIL import Image, ImageDraw, ImageFont
 from PyQt5.QtGui import QPixmap
 
 BOUNDING_BOX_WIDTH = 6  # Width of the bounding box lines
+
+# Global cache for processed images
+_image_cache = {}
+_processed_image_cache = {}
+
+def clear_image_cache():
+    """Clear the global image cache."""
+    global _image_cache, _processed_image_cache
+    _image_cache.clear()
+    _processed_image_cache.clear()
+
+def get_cache_key(img_path: str, modification_time: float = None) -> str:
+    """Generate a cache key for an image."""
+    if modification_time is not None:
+        return f"{img_path}_{modification_time}"
+    return img_path
+
+def load_image_cached(img_path: str) -> Image.Image:
+    """Load an image with caching."""
+    global _image_cache
+    
+    try:
+        import os
+        mtime = os.path.getmtime(img_path)
+        cache_key = get_cache_key(img_path, mtime)
+        
+        if cache_key in _image_cache:
+            return _image_cache[cache_key]
+        
+        img = Image.open(img_path)
+        # Keep cache size reasonable
+        if len(_image_cache) > 50:
+            # Remove oldest entries
+            keys_to_remove = list(_image_cache.keys())[:10]
+            for key in keys_to_remove:
+                del _image_cache[key]
+        
+        _image_cache[cache_key] = img
+        return img
+    except Exception:
+        return Image.open(img_path)  # Fallback without cache
 
 def crop_image(img: Image.Image, box: List[int]) -> Image.Image:
     """Crop an image using the provided bounding box."""
@@ -14,27 +57,36 @@ def crop_image(img: Image.Image, box: List[int]) -> Image.Image:
     return img.crop((left, top, right, bottom))
 
 
+@lru_cache(maxsize=128)
+def get_font():
+    """Get font with caching."""
+    try:
+        return ImageFont.truetype("arial.ttf", 20)
+    except:
+        try:
+            return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+        except:
+            return ImageFont.load_default()
+
+
 def draw_bounding_boxes(img: Image.Image, data_item: Dict[str, Any]) -> Image.Image:
     """Draw bounding boxes on the image for person, bib, and shoes."""
+    global _processed_image_cache
+    
+    # Create cache key based on image hash and bounding box data
+    img_bytes = img.tobytes()
+    bbox_str = str(data_item.get("bib", {})) + str(data_item.get("shoes", []))
+    cache_key = hashlib.md5(img_bytes + bbox_str.encode()).hexdigest()
+    
+    if cache_key in _processed_image_cache:
+        return _processed_image_cache[cache_key]
+    
     # Create a copy of the image to draw on
     img_copy = img.copy()
     draw = ImageDraw.Draw(img_copy)
     
-    # Try to load a font, fall back to default if not available
-    try:
-        font = ImageFont.truetype("arial.ttf", 20)
-    except:
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
-        except:
-            font = ImageFont.load_default()
-    
-    # Draw person bounding box (green)
-    #person_bbox = data_item.get("bbox") or data_item.get("person_bbox")
-    #if person_bbox and len(person_bbox) >= 4:
-    #    left, top, right, bottom = person_bbox
-    #    draw.rectangle([left, top, right, bottom], outline="green", width=BOUNDING_BOX_WIDTH)
-    #    draw.text((left, top - 25), "Person", fill="green", font=font)
+    # Get cached font
+    font = get_font()
     
     # Draw bib bounding box (blue)
     bib_data = data_item.get("bib", {})
@@ -43,7 +95,11 @@ def draw_bounding_boxes(img: Image.Image, data_item: Dict[str, Any]) -> Image.Im
         if len(bib_bbox) >= 4:
             left, top, right, bottom = bib_bbox
             draw.rectangle([left, top, right, bottom], outline="blue", width=BOUNDING_BOX_WIDTH)
-            draw.text((left, top - 25), f'{data_item["run_data"]["bib_number"]} ({bib_data["confidence"]:.2f})', fill="blue", font=font)
+            run_data = data_item.get("run_data", {})
+            if isinstance(run_data, dict):
+                bib_number = run_data.get("bib_number", "")
+                confidence = bib_data.get("confidence", 0.0)
+                draw.text((left, top - 25), f'{bib_number} ({confidence:.2f})', fill="blue", font=font)
     
     # Draw shoe bounding boxes (red)
     shoes = data_item.get("shoes", [])
@@ -55,7 +111,12 @@ def draw_bounding_boxes(img: Image.Image, data_item: Dict[str, Any]) -> Image.Im
             
             # Get shoe label
             brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", f"Shoe {i+1}")
-            draw.text((left, top - 25), f'{brand} ({shoe.get("classification_confidence"):.2f})', fill="red", font=font)
+            confidence = shoe.get("classification_confidence", 0.0)
+            draw.text((left, top - 25), f'{brand} ({confidence:.2f})', fill="red", font=font)
+    
+    # Cache the result if cache isn't too large
+    if len(_processed_image_cache) < 20:
+        _processed_image_cache[cache_key] = img_copy
     
     return img_copy
 

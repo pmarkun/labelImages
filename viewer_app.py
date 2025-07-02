@@ -567,7 +567,9 @@ class RunnerViewer(QMainWindow):
                     'index': idx,
                     'confidence': total_confidence,
                     'bib_number': bib_number,
-                    'category': category
+                    'category': category,
+                    'position': run_data.get("position", 999999),
+                    'gender': run_data.get("gender", "N/A")  # Default to "N/A" if not present
                 }
 
     def populate_tree(self) -> None:
@@ -598,18 +600,18 @@ class RunnerViewer(QMainWindow):
             relevant_bibs.append(cache_data)
         
         # Sort by position (numeric value of bib number)
-        relevant_bibs.sort(key=lambda x: self.get_position_from_bib(x['bib_number']))
+        relevant_bibs.sort(key=lambda x: self.get_position_from_bib(x['position']))
         
         # Create tree nodes
         for cache_data in relevant_bibs:
             bib_number = cache_data['bib_number']
-            position = self.get_position_from_bib(bib_number)
-            
+            position = self.get_position_from_bib(cache_data['position'])
+            gender = cache_data.get('gender', "N/A")
             # Create the bib node with format [Position]. [Bib Number]
             if position == 999999:
-                bib_text = f"?. {bib_number}"
+                bib_text = f"?. {gender} {bib_number}"
             else:
-                bib_text = f"{position}. {bib_number}"
+                bib_text = f"{position}. {gender} {bib_number}"
             
             bib_node = QTreeWidgetItem(self.tree, [bib_text])
             

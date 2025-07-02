@@ -265,6 +265,13 @@ class RunnerViewer(QMainWindow):
         filter_group = QGroupBox("Filtros")
         filter_layout = QVBoxLayout(filter_group)
         
+        # Category filter
+        filter_layout.addWidget(QLabel("Categoria:"))
+        self.category_filter = QComboBox()
+        self.category_filter.addItem("Todas as categorias")
+        self.category_filter.activated.connect(self.on_filter_changed)
+        filter_layout.addWidget(self.category_filter)
+        
         self.filter_unchecked_only = QCheckBox("Mostrar apenas dorsais sem imagens checadas")
         self.filter_unchecked_only.stateChanged.connect(self.on_filter_changed)
         filter_layout.addWidget(self.filter_unchecked_only)
@@ -278,23 +285,6 @@ class RunnerViewer(QMainWindow):
         # Instala event filter para interceptar eventos de teclado
         self.tree.installEventFilter(self)
         layout.addWidget(self.tree)
-        
-        # Statistics box
-        stats_group = QGroupBox("Estatísticas de Marcas")
-        stats_layout = QVBoxLayout(stats_group)
-        
-        # Create scrollable area for statistics
-        stats_scroll = QScrollArea()
-        stats_scroll.setWidgetResizable(True)
-        stats_scroll.setMaximumHeight(400)
-        
-        self.stats_label = QLabel()
-        self.stats_label.setStyleSheet("font-size: 11px; color: #333; padding: 5px;")
-        self.stats_label.setWordWrap(True)
-        stats_scroll.setWidget(self.stats_label)
-        
-        stats_layout.addWidget(stats_scroll)
-        layout.addWidget(stats_group)
         
         return panel
         
@@ -474,7 +464,6 @@ class RunnerViewer(QMainWindow):
         
         self.collect_stats()
         self.populate_tree()
-        self.calculate_brand_statistics()
         self.show_entry(0)
         self.update_status_bar()
         self.update_window_title()
@@ -491,6 +480,10 @@ class RunnerViewer(QMainWindow):
         
         # Add any additional brands found in the data
         cats = set()
+        
+        # Build cache for best images per bib number to improve performance
+        self.bib_cache = {}
+        
         for item in self.data:
             for shoe in item.get("shoes", []):
                 # Support both old and new format
@@ -506,12 +499,20 @@ class RunnerViewer(QMainWindow):
             
             if bib_cat and bib_cat != "Not Identifiable":
                 cats.add(bib_cat)
+        
+        # Build bib cache for performance
+        self.build_bib_cache()
                 
         self.brands = sorted(brands)
         self.bib_categories = sorted(cats)
 
         self.bib_category.clear()
         self.bib_category.addItems(self.bib_categories)
+        
+        # Update category filter
+        self.category_filter.clear()
+        self.category_filter.addItem("Todas as categorias")
+        self.category_filter.addItems(self.bib_categories)
 
         # prepare brand checkboxes
         for chk in self.brand_checks:
@@ -527,50 +528,154 @@ class RunnerViewer(QMainWindow):
             self.brand_layout.addWidget(cb, row, col)
             self.brand_checks.append(cb)
 
+    def build_bib_cache(self) -> None:
+        """Build cache of best images per bib number for performance"""
+        self.bib_cache = {}
+        
+        for idx, item in enumerate(self.data):
+            # Get bib number from run_data
+            bib_number = ""
+            run_data = item.get("run_data", {})
+            if isinstance(run_data, dict):
+                bib_number = str(run_data.get("bib_number", ""))
+            
+            if not bib_number:
+                continue
+                
+            # Get category
+            category = ""
+            if isinstance(run_data, dict):
+                category = run_data.get("run_category", "")
+                if category == "Not Identifiable":
+                    category = "?"
+            
+            # Calculate total confidence for shoes in this image
+            total_confidence = 0
+            shoes = item.get("shoes", [])
+            for shoe in shoes:
+                confidence = shoe.get("confidence", 0)
+                if isinstance(confidence, (int, float)):
+                    total_confidence += confidence
+            
+            # Create cache key
+            cache_key = f"{bib_number}|{category}"
+            
+            # Check if this is the best image for this bib/category combination
+            if cache_key not in self.bib_cache or total_confidence > self.bib_cache[cache_key]['confidence']:
+                self.bib_cache[cache_key] = {
+                    'image': item,
+                    'index': idx,
+                    'confidence': total_confidence,
+                    'bib_number': bib_number,
+                    'category': category
+                }
+
     def populate_tree(self) -> None:
         self.tree.clear()
-        cats = {}
+        
+        # Get selected category filter
+        selected_category = self.category_filter.currentText() if hasattr(self, 'category_filter') else "Todas as categorias"
+        if selected_category == "Todas as categorias":
+            selected_category = None
         
         # Check if we should filter for unchecked only
         filter_unchecked_only = hasattr(self, 'filter_unchecked_only') and self.filter_unchecked_only.isChecked()
         
-        for idx, item in enumerate(self.data):
-            # Get category from run_data
-            cat = "?"
-            run_data = item.get("run_data", {})
-            if isinstance(run_data, dict):
-                cat = run_data.get("run_category", "?")
-                if cat == "Not Identifiable":
-                    cat = "?"
+        # Get relevant cache entries for the selected category
+        relevant_bibs = []
+        for cache_key, cache_data in getattr(self, 'bib_cache', {}).items():
+            bib_number = cache_data['bib_number']
+            category = cache_data['category']
             
-            # Get bib number from run_data
-            bib_num = "?"
-            if isinstance(run_data, dict):
-                bib_num = run_data.get("bib_number", "?")
-            
-            # Apply filter: skip this bib if it has checked images and we're filtering for unchecked only
-            if filter_unchecked_only and bib_num != "?" and self.bib_has_checked_images(str(bib_num)):
+            # Skip if doesn't match category filter
+            if selected_category and category != selected_category:
                 continue
             
-            is_checked = item.get("checked", False)
+            # Apply filter: skip this bib if it has checked images and we're filtering for unchecked only
+            if filter_unchecked_only and bib_number != "?" and self.bib_has_checked_images(str(bib_number)):
+                continue
             
-            cat_node = cats.get(cat)
-            if not cat_node:
-                cat_node = QTreeWidgetItem(self.tree, [cat])
-                cats[cat] = cat_node
-            bib_node = None
-            # search if bib child exists
-            for i in range(cat_node.childCount()):
-                child = cat_node.child(i)
-                if child and child.text(0) == str(bib_num):
-                    bib_node = child
-                    break
-            if bib_node is None:
-                bib_node = QTreeWidgetItem(cat_node, [str(bib_num)])
+            relevant_bibs.append(cache_data)
+        
+        # Sort by position (numeric value of bib number)
+        relevant_bibs.sort(key=lambda x: self.get_position_from_bib(x['bib_number']))
+        
+        # Create tree nodes
+        for cache_data in relevant_bibs:
+            bib_number = cache_data['bib_number']
+            position = self.get_position_from_bib(bib_number)
             
-            # Adiciona ícone para imagens checadas
+            # Create the bib node with format [Position]. [Bib Number]
+            if position == 999999:
+                bib_text = f"?. {bib_number}"
+            else:
+                bib_text = f"{position}. {bib_number}"
+            
+            bib_node = QTreeWidgetItem(self.tree, [bib_text])
+            
+            # Store the best image index as the bib node's data
+            bib_node.setData(0, Qt.UserRole, cache_data['index'])
+            
+            # Mark that this node needs to load children when expanded
+            bib_node.setData(1, Qt.UserRole, {'bib_number': bib_number, 'category': selected_category, 'loaded': False})
+            
+            # Add a dummy child so the expansion triangle appears
+            dummy_child = QTreeWidgetItem(bib_node, ["Carregando..."])
+            
+        # Connect the tree expansion signal to load children on demand
+        if not hasattr(self, '_expansion_connected'):
+            self.tree.itemExpanded.connect(self.on_tree_item_expanded)
+            self._expansion_connected = True
+        
+        # Keep tree collapsed by default
+        self.tree.collapseAll()
+
+    def on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
+        """Load children when a bib node is expanded"""
+        # Check if this item needs to load children
+        item_data = item.data(1, Qt.UserRole)
+        if not isinstance(item_data, dict) or item_data.get('loaded', True):
+            return
+        
+        bib_number = item_data.get('bib_number')
+        category = item_data.get('category')
+        
+        if not bib_number:
+            return
+        
+        # Remove the dummy child
+        item.takeChildren()
+        
+        # Find all images for this bib number
+        images_for_bib = []
+        for idx, data_item in enumerate(self.data):
+            # Get bib number from run_data
+            item_bib_number = ""
+            run_data = data_item.get("run_data", {})
+            if isinstance(run_data, dict):
+                item_bib_number = str(run_data.get("bib_number", ""))
+            
+            # Get category
+            item_category = ""
+            if isinstance(run_data, dict):
+                item_category = run_data.get("run_category", "")
+                if item_category == "Not Identifiable":
+                    item_category = "?"
+            
+            # Skip if doesn't match bib number or category filter
+            if item_bib_number != bib_number:
+                continue
+            if category and category != "?" and item_category != category:
+                continue
+            
+            images_for_bib.append((idx, data_item))
+        
+        # Add child nodes for each image
+        for idx, data_item in images_for_bib:
+            is_checked = data_item.get("checked", False)
+            
             # Support both old and new format for filename
-            img_name = item.get("filename") or item.get("image_path", str(idx))
+            img_name = data_item.get("filename") or data_item.get("image_path", str(idx))
             if img_name != str(idx):
                 # Extract just the filename part if it's a path
                 img_name = os.path.basename(img_name)
@@ -578,9 +683,12 @@ class RunnerViewer(QMainWindow):
             if is_checked:
                 img_name = "✓ " + img_name
             
-            img_node = QTreeWidgetItem(bib_node, [img_name])
+            img_node = QTreeWidgetItem(item, [img_name])
             img_node.setData(0, Qt.UserRole, idx)
-        self.tree.expandAll()
+        
+        # Mark as loaded
+        item_data['loaded'] = True
+        item.setData(1, Qt.UserRole, item_data)
 
     def crop_image(self, img: Image.Image, box: List[int]) -> Image.Image:
         left, top, right, bottom = box
@@ -863,6 +971,9 @@ class RunnerViewer(QMainWindow):
         self.data[self.current_index] = item
         self.mark_unsaved_changes()
         self.update_status_bar()
+        
+        # Rebuild cache after changes
+        self.rebuild_cache_if_needed()
 
     def save_json(self) -> None:
         """Salva no arquivo atual"""
@@ -906,7 +1017,7 @@ class RunnerViewer(QMainWindow):
             self.has_unsaved_changes = True
             self.update_window_title()
 
-    def on_item_selected(self, current: QTreeWidgetItem, previous: QTreeWidgetItem) -> None:
+    def on_item_selected(self, current: QTreeWidgetItem, previous=None) -> None:
         """Handle tree item selection"""
         if current is None:
             return
@@ -986,11 +1097,12 @@ class RunnerViewer(QMainWindow):
             self.current_index = -1
         
         self.populate_tree()
-        self.calculate_brand_statistics()
-        if self.current_index >= 0 and self.current_index < len(self.data):
-            self.show_entry(self.current_index)
-            # Update tree selection to match current index
-            self.select_tree_item_by_index(self.current_index)
+        
+        # Rebuild cache after removing items
+        self.rebuild_cache_if_needed()
+        
+        # Select the next appropriate item in the tree
+        self.select_next_tree_item()
         
         self.mark_unsaved_changes()
         self.update_status_bar()
@@ -1033,10 +1145,12 @@ class RunnerViewer(QMainWindow):
         self.current_index = min(new_index, len(self.data) - 1) if self.data else -1
         
         self.populate_tree()
-        if self.current_index >= 0:
-            self.show_entry(self.current_index)
-            # Update tree selection to match current index
-            self.select_tree_item_by_index(self.current_index)
+        
+        # Rebuild cache after removing items
+        self.rebuild_cache_if_needed()
+        
+        # Select the next appropriate item in the tree  
+        self.select_next_tree_item()
         
         self.mark_unsaved_changes()
         self.update_status_bar()
@@ -1122,7 +1236,6 @@ class RunnerViewer(QMainWindow):
         self.export_current_shoes()
         
         self.populate_tree()
-        self.calculate_brand_statistics()
         self.show_entry(self.current_index)
         # Ensure tree selection stays on current item
         self.select_tree_item_by_index(self.current_index)
@@ -1142,7 +1255,6 @@ class RunnerViewer(QMainWindow):
         current_item['checked'] = not current_checked
         
         self.mark_unsaved_changes()
-        self.calculate_brand_statistics()
         self.update_status_bar()
         
         # Atualiza a visualização para mostrar o status
@@ -1303,14 +1415,74 @@ class RunnerViewer(QMainWindow):
                         return result
             return None
         
-        # Search through all top-level items
+        # Search through all top-level items (bib nodes)
         for i in range(self.tree.topLevelItemCount()):
-            top_item = self.tree.topLevelItem(i)
-            if top_item:
-                result = find_item_with_index(top_item, data_index)
+            bib_item = self.tree.topLevelItem(i)
+            if bib_item:
+                # Check if this bib node itself has the target index (best image)
+                if bib_item.data(0, Qt.UserRole) == data_index:
+                    self.tree.setCurrentItem(bib_item)
+                    return
+                
+                # Search in children (if expanded)
+                result = find_item_with_index(bib_item, data_index)
                 if result:
+                    # Expand the parent if needed
+                    if not bib_item.isExpanded():
+                        bib_item.setExpanded(True)
                     self.tree.setCurrentItem(result)
                     return
+
+    def select_next_tree_item(self) -> None:
+        """Select the next item in the tree after current operations"""
+        current_item = self.tree.currentItem()
+        if not current_item:
+            # If no current item, select the first one
+            if self.tree.topLevelItemCount() > 0:
+                first_item = self.tree.topLevelItem(0)
+                if first_item:
+                    self.tree.setCurrentItem(first_item)
+                    # Trigger selection to update display
+                    self.on_item_selected(first_item, None)
+            return
+        
+        # Try to find the next item
+        next_item = None
+        
+        # If current item has children and is expanded, go to first child
+        if current_item.childCount() > 0 and current_item.isExpanded():
+            next_item = current_item.child(0)
+        else:
+            # Look for next sibling or go up to parent's next sibling
+            parent = current_item.parent()
+            if parent:
+                # We're in a child, find next sibling or parent's next sibling
+                current_index = parent.indexOfChild(current_item)
+                if current_index + 1 < parent.childCount():
+                    next_item = parent.child(current_index + 1)
+                else:
+                    # No more siblings, find parent's next sibling
+                    parent_index = self.tree.indexOfTopLevelItem(parent)
+                    if parent_index + 1 < self.tree.topLevelItemCount():
+                        next_item = self.tree.topLevelItem(parent_index + 1)
+            else:
+                # We're at top level, find next top level item
+                current_index = self.tree.indexOfTopLevelItem(current_item)
+                if current_index + 1 < self.tree.topLevelItemCount():
+                    next_item = self.tree.topLevelItem(current_index + 1)
+        
+        # If we found a next item, select it
+        if next_item:
+            self.tree.setCurrentItem(next_item)
+            # Trigger selection to update display
+            self.on_item_selected(next_item, current_item)
+        else:
+            # No next item found, stay on current or go to last available
+            if self.tree.topLevelItemCount() > 0:
+                last_item = self.tree.topLevelItem(self.tree.topLevelItemCount() - 1)
+                if last_item:
+                    self.tree.setCurrentItem(last_item)
+                    self.on_item_selected(last_item, current_item)
 
     def set_brand_by_key(self, key_char: str) -> None:
         """Define a marca baseada na tecla pressionada conforme configuração"""
@@ -1355,9 +1527,6 @@ class RunnerViewer(QMainWindow):
         self.populate_tree()
         self.select_tree_item_by_index(self.current_index)
         
-        # Update statistics
-        self.calculate_brand_statistics()
-        
         self.mark_unsaved_changes()
         self.update_status_bar()
 
@@ -1397,7 +1566,7 @@ class RunnerViewer(QMainWindow):
         self.mark_unsaved_changes()
         # Update tree to reflect changes
         self.populate_tree()
-        self.select_tree_item_by_index(self.current_index)
+        self.select_next_tree_item()
 
     def on_category_selected(self, index: int) -> None:
         """Handle category selection from dropdown"""
@@ -1423,7 +1592,7 @@ class RunnerViewer(QMainWindow):
         self.mark_unsaved_changes()
         # Update tree to reflect changes
         self.populate_tree()
-        self.select_tree_item_by_index(self.current_index)
+        self.select_next_tree_item()
 
     def on_brand_changed_immediate(self) -> None:
         """Handle real-time changes to shoe brands (immediate for checkboxes)"""
@@ -1470,8 +1639,6 @@ class RunnerViewer(QMainWindow):
         self.mark_unsaved_changes()
         # Refresh the shoe display to show updated brands
         self.show_entry(self.current_index)
-        # Update statistics
-        self.calculate_brand_statistics()
 
     def adjust_shoe_container_size(self):
         """Adjust the shoe container size to fit all shoes without scroll bars"""
@@ -1500,12 +1667,15 @@ class RunnerViewer(QMainWindow):
             # Set the container to the calculated size
             if total_height > 0:
                 self.shoe_container.setFixedHeight(total_height)
+                self.shoe_container.setFixedHeight(total_height)
 
     def export_shoe_crop(self, label, shoe_path):
         """Export a crop of the shoe to crops/[label]/[shoeimg]"""
         try:
             # Verificar se a imagem existe
             if not os.path.exists(shoe_path):
+                print(f"Shoe image not found: {shoe_path}")
+                return
                 print(f"Shoe image not found: {shoe_path}")
                 return
             
@@ -1656,107 +1826,117 @@ class RunnerViewer(QMainWindow):
             self.select_tree_item_by_index(self.current_index)
 
     def on_filter_changed(self) -> None:
-        """Handle filter checkbox changes"""
+        """Handle filter checkbox and category dropdown changes"""
         if self.data:
             self.populate_tree()
+            # Select first item if available after filtering
+            if self.tree.topLevelItemCount() > 0:
+                first_item = self.tree.topLevelItem(0)
+                if first_item:
+                    self.tree.setCurrentItem(first_item)
+                    self.on_item_selected(first_item, None)
 
     def bib_has_checked_images(self, bib_number: str) -> bool:
         """Check if a bib number has any checked images"""
         for item in self.data:
             # Get bib number from run_data
-            item_run_data = item.get("run_data", {})
-            if isinstance(item_run_data, dict):
-                item_bib_number = str(item_run_data.get("bib_number", ""))
-                if item_bib_number == bib_number and item.get("checked", False):
-                    return True
+            item_bib_number = ""
+            run_data = item.get("run_data", {})
+            if isinstance(run_data, dict):
+                item_bib_number = str(run_data.get("bib_number", ""))
+            
+            if item_bib_number == bib_number and item.get("checked", False):
+                return True
         return False
 
-    def calculate_brand_statistics(self) -> None:
-        """Calculate and display brand distribution statistics"""
-        if not self.data:
-            if hasattr(self, 'stats_label'):
-                self.stats_label.setText("Nenhum dado carregado")
-            return
+    def get_position_from_bib(self, bib_number: str) -> int:
+        """Calculates position based on bib number sorting"""
+        if not bib_number or bib_number == "?":
+            return 999999  # Put unknown bibs at the end
         
-        # Count brands in all images and checked images
-        brand_counts_total = {}
-        brand_counts_checked = {}
+        try:
+            return int(bib_number)
+        except ValueError:
+            return 999999
+    
+    def get_best_image_for_bib(self, bib_number: str, category=None) -> dict:
+        """Find the image with highest shoe confidence sum for a given bib number"""
+        best_image = None
+        best_confidence = -1
+        best_index = -1
         
-        total_images = len(self.data)
-        checked_images = 0
+        for idx, item in enumerate(self.data):
+            # Get bib number from run_data
+            item_bib_number = ""
+            run_data = item.get("run_data", {})
+            if isinstance(run_data, dict):
+                item_bib_number = str(run_data.get("bib_number", ""))
+            
+            # Get category if filtering
+            item_category = ""
+            if isinstance(run_data, dict):
+                item_category = run_data.get("run_category", "")
+                if item_category == "Not Identifiable":
+                    item_category = "?"
+            
+            # Skip if doesn't match bib number or category filter
+            if item_bib_number != bib_number:
+                continue
+            if category and category != "?" and item_category != category:
+                continue
+            
+            # Calculate total confidence for shoes in this image
+            total_confidence = 0
+            shoes = item.get("shoes", [])
+            for shoe in shoes:
+                confidence = shoe.get("confidence", 0)
+                if isinstance(confidence, (int, float)):
+                    total_confidence += confidence
+            
+            # Check if this is the best image so far
+            if total_confidence > best_confidence:
+                best_confidence = total_confidence
+                best_image = item
+                best_index = idx
+        
+        return {
+            'image': best_image,
+            'index': best_index,
+            'confidence': best_confidence
+        }
+    
+    def get_all_bib_numbers_for_category(self, category=None) -> list:
+        """Get all unique bib numbers for a given category, sorted by position"""
+        bib_numbers = set()
         
         for item in self.data:
-            is_checked = item.get('checked', False)
-            if is_checked:
-                checked_images += 1
+            # Get bib number from run_data
+            bib_number = ""
+            run_data = item.get("run_data", {})
+            if isinstance(run_data, dict):
+                bib_number = str(run_data.get("bib_number", ""))
             
-            # Get brands from shoes
-            shoes = item.get("shoes", [])
-            image_brands = set()  # Use set to avoid counting same brand multiple times per image
+            # Get category
+            item_category = ""
+            if isinstance(run_data, dict):
+                item_category = run_data.get("run_category", "")
+                if item_category == "Not Identifiable":
+                    item_category = "?"
             
-            for shoe in shoes:
-                # Support both old and new format for shoe brands
-                brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
-                if brand and brand.strip():
-                    image_brands.add(brand.strip())
+            # Skip if doesn't match category filter
+            if category and category != "Todas as categorias" and item_category != category:
+                continue
             
-            # Count each brand found in this image
-            for brand in image_brands:
-                # Count in total
-                brand_counts_total[brand] = brand_counts_total.get(brand, 0) + 1
-                
-                # Count in checked if this image is checked
-                if is_checked:
-                    brand_counts_checked[brand] = brand_counts_checked.get(brand, 0) + 1
+            if bib_number:
+                bib_numbers.add(bib_number)
         
-        # Sort brands by total count (descending)
-        sorted_brands = sorted(brand_counts_total.items(), key=lambda x: x[1], reverse=True)
-        
-        # Take top 9 brands and group the rest as "Outras"
-        top_brands = sorted_brands[:9]
-        other_brands = sorted_brands[9:]
-        
-        # Calculate "Outras" counts
-        outras_total = sum(count for _, count in other_brands)
-        outras_checked = sum(brand_counts_checked.get(brand, 0) for brand, _ in other_brands)
-        
-        # Build statistics text
-        stats_text = "<b>Distribuição de Marcas:</b><br><br>"
-        stats_text += "<table style='width: 100%; border-collapse: collapse;'>"
-        stats_text += "<tr style='background-color: #f0f0f0; font-weight: bold;'>"
-        stats_text += "<td style='padding: 3px; border: 1px solid #ddd;'>Marca</td>"
-        stats_text += "<td style='padding: 3px; border: 1px solid #ddd;'>Total (%)</td>"
-        stats_text += "<td style='padding: 3px; border: 1px solid #ddd;'>Checadas (%)</td>"
-        stats_text += "</tr>"
-        
-        # Add top brands
-        for brand, total_count in top_brands:
-            checked_count = brand_counts_checked.get(brand, 0)
-            total_percent = (total_count / total_images * 100) if total_images > 0 else 0
-            checked_percent = (checked_count / checked_images * 100) if checked_images > 0 else 0
-            
-            stats_text += f"<tr>"
-            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{brand}</td>"
-            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{total_count} ({total_percent:.1f}%)</td>"
-            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{checked_count} ({checked_percent:.1f}%)</td>"
-            stats_text += f"</tr>"
-        
-        # Add "Outras" if there are other brands
-        if outras_total > 0:
-            total_percent = (outras_total / total_images * 100) if total_images > 0 else 0
-            checked_percent = (outras_checked / checked_images * 100) if checked_images > 0 else 0
-            
-            stats_text += f"<tr style='background-color: #f8f9fa;'>"
-            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'><i>Outras</i></td>"
-            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{outras_total} ({total_percent:.1f}%)</td>"
-            stats_text += f"<td style='padding: 3px; border: 1px solid #ddd;'>{outras_checked} ({checked_percent:.1f}%)</td>"
-            stats_text += f"</tr>"
-        
-        stats_text += "</table>"
-        stats_text += f"<br><small>Total de imagens: {total_images} | Checadas: {checked_images}</small>"
-        
-        if hasattr(self, 'stats_label'):
-            self.stats_label.setText(stats_text)
+        # Sort by position (numeric value of bib number)
+        return sorted(bib_numbers, key=self.get_position_from_bib)
+
+    def rebuild_cache_if_needed(self) -> None:
+        """Rebuild cache after data changes"""
+        if hasattr(self, 'data') and self.data:
+            self.build_bib_cache()
 
 def main() -> None:
     app = QApplication(sys.argv)

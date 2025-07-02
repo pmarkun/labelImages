@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Tuple
 from PIL import Image, ImageDraw, ImageFont
 from PyQt5.QtGui import QPixmap
 
+BOUNDING_BOX_WIDTH = 6  # Width of the bounding box lines
 
 def crop_image(img: Image.Image, box: List[int]) -> Image.Image:
     """Crop an image using the provided bounding box."""
@@ -29,11 +30,11 @@ def draw_bounding_boxes(img: Image.Image, data_item: Dict[str, Any]) -> Image.Im
             font = ImageFont.load_default()
     
     # Draw person bounding box (green)
-    person_bbox = data_item.get("bbox") or data_item.get("person_bbox")
-    if person_bbox and len(person_bbox) >= 4:
-        left, top, right, bottom = person_bbox
-        draw.rectangle([left, top, right, bottom], outline="green", width=3)
-        draw.text((left, top - 25), "Person", fill="green", font=font)
+    #person_bbox = data_item.get("bbox") or data_item.get("person_bbox")
+    #if person_bbox and len(person_bbox) >= 4:
+    #    left, top, right, bottom = person_bbox
+    #    draw.rectangle([left, top, right, bottom], outline="green", width=BOUNDING_BOX_WIDTH)
+    #    draw.text((left, top - 25), "Person", fill="green", font=font)
     
     # Draw bib bounding box (blue)
     bib_data = data_item.get("bib", {})
@@ -41,8 +42,8 @@ def draw_bounding_boxes(img: Image.Image, data_item: Dict[str, Any]) -> Image.Im
         bib_bbox = bib_data["bbox"]
         if len(bib_bbox) >= 4:
             left, top, right, bottom = bib_bbox
-            draw.rectangle([left, top, right, bottom], outline="blue", width=3)
-            draw.text((left, top - 25), "Bib", fill="blue", font=font)
+            draw.rectangle([left, top, right, bottom], outline="blue", width=BOUNDING_BOX_WIDTH)
+            draw.text((left, top - 25), f'{data_item["run_data"]["bib_number"]} ({bib_data["confidence"]:.2f})', fill="blue", font=font)
     
     # Draw shoe bounding boxes (red)
     shoes = data_item.get("shoes", [])
@@ -50,11 +51,11 @@ def draw_bounding_boxes(img: Image.Image, data_item: Dict[str, Any]) -> Image.Im
         shoe_bbox = shoe.get("bbox")
         if shoe_bbox and len(shoe_bbox) >= 4:
             left, top, right, bottom = shoe_bbox
-            draw.rectangle([left, top, right, bottom], outline="red", width=3)
+            draw.rectangle([left, top, right, bottom], outline="red", width=BOUNDING_BOX_WIDTH)
             
             # Get shoe label
             brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", f"Shoe {i+1}")
-            draw.text((left, top - 25), brand, fill="red", font=font)
+            draw.text((left, top - 25), f'{brand} ({shoe.get("classification_confidence"):.2f})', fill="red", font=font)
     
     return img_copy
 

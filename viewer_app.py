@@ -737,7 +737,7 @@ class RunnerViewer(RunnerViewerMainWindow):
                 QMessageBox.information(self, "Imagem Checada", "Esta imagem está checada e não pode ser removida. Pressione 'C' para deschequear primeiro.")
                 return
             
-            current_tree_item = self.tree.currentItem()
+            current_tree_item = self.get_tree_widget().currentItem()
             if current_tree_item:
                 if current_tree_item.childCount() > 0 and current_tree_item.data(0, Qt.UserRole) is None:
                     # Remove all images with this bib number

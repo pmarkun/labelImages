@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
 from core.data_manager import DataManager
 from core.models import DataCache, get_position_from_bib
 from ui.main_window import RunnerViewerMainWindow
+from ui.config_dialog import ConfigurationDialog
 from ui.widgets import ClickableLabel
 from utils.config import load_config, save_config
 from utils.image_utils import crop_image, pil_to_qpixmap
@@ -41,7 +42,9 @@ from utils.image_utils import crop_image, pil_to_qpixmap
 # Default configuration
 DEFAULT_VIEWER_CONFIG = {
     "base_path": os.getcwd(),
-    "labels": []
+    "labels": [],
+    "chest_plate_confidence_threshold": 0.5,
+    "shoes_confidence_threshold": 0.5
 }
 
 
@@ -85,6 +88,7 @@ class RunnerViewer(RunnerViewerMainWindow):
         self.json_save_requested.connect(self.save_json)
         self.json_save_as_requested.connect(self.save_as_json)
         self.base_path_change_requested.connect(self.select_base_path)
+        self.configuration_requested.connect(self.open_configuration_dialog)
         
         # Panel signals
         self.left_panel.filter_changed.connect(self.on_filter_changed)
@@ -1063,6 +1067,28 @@ class RunnerViewer(RunnerViewerMainWindow):
                 event.ignore()
         else:
             event.accept()
+
+    def open_configuration_dialog(self) -> None:
+        """Open the configuration dialog to adjust settings."""
+        # Create and show the configuration dialog
+        dialog = ConfigurationDialog(self.config, self)
+        if dialog.exec_() == dialog.Accepted:
+            # Get the updated configuration
+            updated_config = dialog.get_updated_config()
+            
+            # Update the current configuration
+            self.config.update(updated_config)
+            
+            # Save the configuration to YAML file
+            try:
+                save_config(self.config_path, self.config)
+                self.mark_unsaved_changes()  # Mark as having changes that might affect display
+            except Exception as e:
+                QMessageBox.critical(
+                    self, 
+                    "Erro ao Salvar Configuração", 
+                    f"Não foi possível salvar a configuração: {e}"
+                )
 
 
 def main() -> None:

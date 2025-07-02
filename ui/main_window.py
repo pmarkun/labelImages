@@ -23,6 +23,7 @@ class RunnerViewerMainWindow(QMainWindow):
     json_save_requested = pyqtSignal()
     json_save_as_requested = pyqtSignal()
     base_path_change_requested = pyqtSignal()
+    configuration_requested = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -130,6 +131,7 @@ class RunnerViewerMainWindow(QMainWindow):
     
     def setup_menu(self) -> None:
         """Setup the application menu."""
+        # File menu
         open_json = QAction("📂 Abrir JSON", self)
         open_json.triggered.connect(self._on_open_json)
         open_json.setShortcut("Ctrl+O")
@@ -145,14 +147,23 @@ class RunnerViewerMainWindow(QMainWindow):
         set_base = QAction("📁 Definir Base Path", self)
         set_base.triggered.connect(lambda: self.base_path_change_requested.emit())
         
-        menu = self.menuBar().addMenu("Arquivo")
-        if menu:
-            menu.addAction(open_json)
-            menu.addSeparator()
-            menu.addAction(save_json)
-            menu.addAction(save_as_json)
-            menu.addSeparator()
-            menu.addAction(set_base)
+        file_menu = self.menuBar().addMenu("Arquivo")
+        if file_menu:
+            file_menu.addAction(open_json)
+            file_menu.addSeparator()
+            file_menu.addAction(save_json)
+            file_menu.addAction(save_as_json)
+            file_menu.addSeparator()
+            file_menu.addAction(set_base)
+        
+        # Tools menu
+        config_action = QAction("⚙️ Configurações", self)
+        config_action.triggered.connect(lambda: self.configuration_requested.emit())
+        config_action.setShortcut("Ctrl+,")
+        
+        tools_menu = self.menuBar().addMenu("Ferramentas")
+        if tools_menu:
+            tools_menu.addAction(config_action)
     
     def setup_ui(self) -> None:
         """Setup the main user interface."""

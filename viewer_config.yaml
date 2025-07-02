@@ -1,5 +1,5 @@
-base_path: '/home/markun/devel/storage/olympikus'
-output_folder: 'train'
+base_path: /home/markun/devel/storage/olympikus
+chest_plate_confidence_threshold: 0.8
 labels:
 - key: q
   label: Olympikus
@@ -29,3 +29,5 @@ labels:
   label: Desconhecido
 - key: z
   label: Outros
+output_folder: train
+shoes_confidence_threshold: 0.7

@@ -218,6 +218,7 @@ class RunnerViewerApp(QObject):
         
         # Update UI components
         self._update_category_filter()
+        self._update_gender_filter()
         self._update_bib_category_combo()
         self._setup_brand_checkboxes()
         self._setup_shortcuts_info()
@@ -228,6 +229,13 @@ class RunnerViewerApp(QObject):
         category_filter.clear()
         category_filter.addItem("Todas as categorias")
         category_filter.addItems(self.bib_categories)
+    
+    def _update_gender_filter(self) -> None:
+        """Update the gender filter dropdown."""
+        category_filter = self.main_window.get_gender_filter()
+        category_filter.clear()
+        category_filter.addItem("Todas os gêneros")
+        category_filter.addItems(self.genders)
     
     def _update_bib_category_combo(self) -> None:
         """Update the bib category dropdown."""

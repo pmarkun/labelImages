@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import QApplication, QCheckBox, QTreeWidgetItem, QMessageBo
 from ui.main_window import RunnerViewerMainWindow
 from ui.tree_widget import TreeManager
 from ui.image_display import ImageDisplayManager, ExportManager
+from ui.export_dialog import ExportDialog
 from core.data_manager import DataManager
 from utils.config import load_config, save_config
 
@@ -72,6 +73,7 @@ class RunnerViewerApp(QObject):
         self.main_window.json_save_requested.connect(self.save_json)
         self.main_window.json_save_as_requested.connect(self.save_as_json)
         self.main_window.base_path_change_requested.connect(self.select_base_path)
+        self.main_window.export_requested.connect(self.open_export_dialog)
         
         # Left panel signals
         self.main_window.left_panel.filter_changed.connect(self.on_filter_changed)
@@ -176,6 +178,26 @@ class RunnerViewerApp(QObject):
                 
                 self.show_entry(0)
     
+    def open_export_dialog(self) -> None:
+        """Open the export dialog for data export with various options."""
+        if not self.data_manager.data:
+            QMessageBox.information(
+                self.main_window, 
+                "Nenhum Dados", 
+                "Não há dados carregados para exportar."
+            )
+            return
+        
+        # Create and show the export dialog
+        dialog = ExportDialog(self.main_window)
+        
+        # Set current data and config
+        dialog.set_data(self.data_manager.data)
+        dialog.set_base_path(self.config.get("base_path", ""))
+        
+        # Show the dialog
+        dialog.exec_()
+
     def collect_stats(self) -> None:
         """Collect brands and categories from data."""
         config_labels = self.config.get("labels", [])
@@ -665,14 +687,8 @@ class RunnerViewerApp(QObject):
         self.data_manager.save_state(self.current_index)
         self.data_manager.propagate_data_to_same_bib(self.current_index)
         
-        # Export shoes if export manager is available
-        if self.export_manager:
-            current_item = self.data_manager.data[self.current_index]
-            run_data = current_item.get("run_data", {})
-            if isinstance(run_data, dict):
-                bib_number = str(run_data.get("bib_number", ""))
-                if bib_number:
-                    self.export_manager.export_shoes_for_bib(bib_number)
+        # Note: Export functionality moved to manual export dialog (Tools > Export)
+        # No longer automatically exports when K is pressed
         
         # Repopulate tree with expansion state preserved
         self.tree_manager.set_data(self.data_manager.data)

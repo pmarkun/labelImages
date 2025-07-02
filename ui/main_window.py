@@ -24,6 +24,7 @@ class RunnerViewerMainWindow(QMainWindow):
     json_save_as_requested = pyqtSignal()
     base_path_change_requested = pyqtSignal()
     configuration_requested = pyqtSignal()
+    export_requested = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -161,9 +162,15 @@ class RunnerViewerMainWindow(QMainWindow):
         config_action.triggered.connect(lambda: self.configuration_requested.emit())
         config_action.setShortcut("Ctrl+,")
         
+        export_action = QAction("📤 Exportar Dados", self)
+        export_action.triggered.connect(lambda: self.export_requested.emit())
+        export_action.setShortcut("Ctrl+E")
+        
         tools_menu = self.menuBar().addMenu("Ferramentas")
         if tools_menu:
             tools_menu.addAction(config_action)
+            tools_menu.addSeparator()
+            tools_menu.addAction(export_action)
     
     def setup_ui(self) -> None:
         """Setup the main user interface."""

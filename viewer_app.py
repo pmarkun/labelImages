@@ -36,8 +36,9 @@ from core.models import DataCache, get_position_from_bib
 from ui.main_window import RunnerViewerMainWindow
 from ui.config_dialog import ConfigurationDialog
 from ui.widgets import ClickableLabel
+from ui.image_display import ImageDisplayManager
 from utils.config import load_config, save_config
-from utils.image_utils import crop_image, pil_to_qpixmap
+from utils.image_utils import crop_image, pil_to_qpixmap, draw_bounding_boxes
 
 # Default configuration
 DEFAULT_VIEWER_CONFIG = {
@@ -74,6 +75,15 @@ class RunnerViewer(RunnerViewerMainWindow):
         # Cache for performance
         self.bib_cache = {}
         self._expansion_connected = False
+        
+        # Initialize image display manager
+        self.image_display = ImageDisplayManager(
+            self.get_thumb_label(),
+            self.get_runner_label(),
+            self.get_shoe_container(),
+            self.get_shoe_layout()
+        )
+        self.image_display.set_shoe_click_callback(self.on_shoe_click)
         
         # Connect UI signals to handlers
         self.connect_signals()
@@ -229,7 +239,7 @@ class RunnerViewer(RunnerViewerMainWindow):
         tree.collapseAll()
 
     def show_entry(self, index: int) -> None:
-        """Display entry using new image utilities."""
+        """Display entry using ImageDisplayManager."""
         if not self.data_manager.data:
             return
         
@@ -237,133 +247,15 @@ class RunnerViewer(RunnerViewerMainWindow):
         self.current_index = index
         data_item = self.data_manager.data[index]
         
-        # Check if checked
-        is_checked = data_item.get('checked', False)
-        
-        # Get image path
-        img_filename = data_item.get("filename") or data_item.get("image_path", "")
-        img_path = os.path.join(self.config.get("base_path", ""), img_filename)
-        
-        try:
-            img = Image.open(img_path)
-        except Exception:
-            print("Imagem não encontrada")
-            return
-        
-        # Display thumbnail with status indicator
-        thumb_img = img.resize((150, int(150*img.height/img.width)))
-        thumb_pixmap = pil_to_qpixmap(thumb_img)
-        
-        thumb_label = self.get_thumb_label()
-        if is_checked:
-            thumb_label.setStyleSheet("border: 4px solid #28a745; border-radius: 8px; padding: 16px; background-color: #d4edda;")
-        else:
-            thumb_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 20px; background-color: #f8f9fa;")
-        
-        thumb_label.setPixmap(thumb_pixmap)
-        
-        # Display runner crop
-        bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, img.width, img.height])
-        runner = crop_image(img, bbox)
-        runner_label = self.get_runner_label()
-        target_width, target_height = runner_label.width(), runner_label.height()
-        width_ratio = target_width / runner.width * 0.95
-        height_ratio = target_height / runner.height * 0.95
-        scale_ratio = min(width_ratio, height_ratio)
-        runner_img = runner.resize((int(runner.width * scale_ratio), int(runner.height * scale_ratio)))
-        runner_pixmap = pil_to_qpixmap(runner_img)
-        runner_label.setPixmap(runner_pixmap)
-
-        # Display shoes
-        self._display_shoes(img, data_item)
+        # Use ImageDisplayManager to display the image
+        base_path = self.config.get("base_path", "")
+        self.image_display.display_image(data_item, base_path)
         
         # Update right panel data
         self._update_right_panel_data(data_item)
         
         # Update status bar
         self.update_status_bar()
-
-    def _display_shoes(self, img: Image.Image, data_item: Dict[str, Any]) -> None:
-        """Display shoes using the new system."""
-        # Clear existing shoes
-        shoe_layout = self.get_shoe_layout()
-        for i in reversed(range(shoe_layout.count())):
-            layout_item = shoe_layout.itemAt(i)
-            if layout_item:
-                w = layout_item.widget()
-                if w:
-                    w.deleteLater()
-        
-        shoes = data_item.get("shoes", [])
-        num_shoes = len(shoes)
-        
-        if num_shoes == 0:
-            return
-        
-        # Calculate container dimensions
-        shoe_container = self.get_shoe_container()
-        container_height = shoe_container.height()
-        container_width = 270
-        
-        shoe_container.setMinimumHeight(container_height)
-        shoe_container.setMaximumHeight(container_height)
-        
-        # Calculate available space per shoe
-        label_height = 20
-        widget_margins = 10
-        layout_spacing = shoe_layout.spacing() * max(0, num_shoes - 1)
-        total_reserved_height = num_shoes * (label_height + widget_margins) + layout_spacing + 30
-        
-        available_height_per_shoe = max((container_height - total_reserved_height) / num_shoes, 40)
-        available_width = container_width - 20
-        
-        # Display each shoe
-        for shoe_index, shoe in enumerate(shoes):
-            shoe_bbox = shoe.get("bbox")
-            if shoe_bbox and len(shoe_bbox) >= 4:
-                try:
-                    crop = crop_image(img, shoe_bbox)
-                    
-                    # Calculate scaling
-                    height_ratio = available_height_per_shoe / crop.height if crop.height > 0 else 1
-                    width_ratio = available_width / crop.width if crop.width > 0 else 1
-                    shoe_ratio = min(height_ratio, width_ratio, 2.0)
-                    shoe_ratio = max(shoe_ratio, 0.2)
-                    shoe_ratio = min(shoe_ratio, 3.0)
-                    
-                    new_width = max(int(crop.width * shoe_ratio), 60)
-                    new_height = max(int(crop.height * shoe_ratio), 40)
-                    
-                    shoe_img = crop.resize((new_width, new_height))
-                    shoe_pixmap = pil_to_qpixmap(shoe_img)
-                    
-                    # Create shoe widget container
-                    shoe_widget = QWidget()
-                    shoe_widget_layout = QVBoxLayout(shoe_widget)
-                    shoe_widget_layout.setContentsMargins(5, 5, 5, 5)
-                    
-                    # Add brand label
-                    brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
-                    if brand:
-                        brand_lbl = QLabel(brand)
-                        brand_lbl.setStyleSheet("font-size: 11px; color: #666; font-weight: bold;")
-                        brand_lbl.setAlignment(Qt.AlignCenter)
-                        shoe_widget_layout.addWidget(brand_lbl)
-                    
-                    # Create clickable shoe label
-                    lbl = ClickableLabel(shoe_index=shoe_index, callback=self.on_shoe_click)
-                    lbl.setPixmap(shoe_pixmap)
-                    lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px; cursor: pointer;")
-                    lbl.setAlignment(Qt.AlignCenter)
-                    
-                    shoe_widget_layout.addWidget(lbl)
-                    shoe_widget_layout.addStretch()
-                    
-                    shoe_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-                    shoe_layout.addWidget(shoe_widget)
-                    
-                except Exception as e:
-                    print(f"Error processing shoe image: {e}")
 
     def _update_right_panel_data(self, data_item: Dict[str, Any]) -> None:
         """Update the right panel with current data."""

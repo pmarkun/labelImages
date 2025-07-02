@@ -7,7 +7,7 @@ from PIL import Image
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QMessageBox, QSizePolicy
 from .widgets import ClickableLabel
-from ..utils.image_utils import crop_image, pil_to_qpixmap
+from utils.image_utils import crop_image, pil_to_qpixmap, draw_bounding_boxes
 
 
 class ImageDisplayManager:
@@ -44,7 +44,7 @@ class ImageDisplayManager:
             return
         
         # Display thumbnail
-        self._display_thumbnail(img, is_checked)
+        self._display_thumbnail(img, is_checked, data_item)
         
         # Display runner crop
         self._display_runner(img, data_item)
@@ -52,9 +52,13 @@ class ImageDisplayManager:
         # Display shoes
         self._display_shoes(img, data_item)
     
-    def _display_thumbnail(self, img: Image.Image, is_checked: bool) -> None:
-        """Display the thumbnail image."""
-        thumb_img = img.resize((150, int(150 * img.height / img.width)))
+    def _display_thumbnail(self, img: Image.Image, is_checked: bool, data_item: Dict[str, Any]) -> None:
+        """Display the thumbnail image with bounding boxes."""
+        # Draw bounding boxes on the image
+        img_with_boxes = draw_bounding_boxes(img, data_item)
+        
+        # Resize for thumbnail
+        thumb_img = img_with_boxes.resize((150, int(150 * img_with_boxes.height / img_with_boxes.width)))
         thumb_pixmap = pil_to_qpixmap(thumb_img)
         
         # Apply style based on checked status
@@ -70,9 +74,13 @@ class ImageDisplayManager:
         self.thumb_label.setPixmap(thumb_pixmap)
     
     def _display_runner(self, img: Image.Image, data_item: Dict[str, Any]) -> None:
-        """Display the runner crop."""
+        """Display the runner crop with bounding boxes."""
+        # Draw bounding boxes on the full image first
+        img_with_boxes = draw_bounding_boxes(img, data_item)
+        
+        # Then crop the runner area
         bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, img.width, img.height])
-        runner = crop_image(img, bbox)
+        runner = crop_image(img_with_boxes, bbox)
         
         # Calculate proportional resize
         target_width, target_height = self.runner_label.width(), self.runner_label.height()

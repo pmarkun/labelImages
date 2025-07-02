@@ -669,6 +669,54 @@ class RunnerViewer(RunnerViewerMainWindow):
                     tree.setCurrentItem(last_item)
                     self.on_item_selected(last_item, current_item)
 
+    def maintain_current_tree_selection(self) -> None:
+        """Maintain current tree selection after brand changes."""
+        tree = self.get_tree_widget()
+        current_item = tree.currentItem()
+        
+        if current_item:
+            # Get the current data index
+            data_index = current_item.data(0, Qt.UserRole)
+            if data_index is not None:
+                # Refresh the tree to show updated data
+                self.populate_tree()
+                # Find and select the item with the same data index
+                self._select_item_by_data_index(data_index)
+            else:
+                # Current item is a bib group, just refresh
+                self.populate_tree()
+                # Try to reselect the same bib group
+                for i in range(tree.topLevelItemCount()):
+                    top_item = tree.topLevelItem(i)
+                    if top_item and top_item.text(0) == current_item.text(0):
+                        tree.setCurrentItem(top_item)
+                        break
+
+    def _select_item_by_data_index(self, target_index: int) -> None:
+        """Select tree item by data index."""
+        tree = self.get_tree_widget()
+        
+        # Search through all items to find the one with matching data index
+        for i in range(tree.topLevelItemCount()):
+            top_item = tree.topLevelItem(i)
+            if top_item:
+                # Check top level item
+                data_index = top_item.data(0, Qt.UserRole)
+                if data_index == target_index:
+                    tree.setCurrentItem(top_item)
+                    self.on_item_selected(top_item, None)
+                    return
+                
+                # Check child items
+                for j in range(top_item.childCount()):
+                    child_item = top_item.child(j)
+                    if child_item:
+                        data_index = child_item.data(0, Qt.UserRole)
+                        if data_index == target_index:
+                            tree.setCurrentItem(child_item)
+                            self.on_item_selected(child_item, None)
+                            return
+
     def _is_current_checked(self) -> bool:
         """Check if current image is checked."""
         if not self.data_manager.data or self.current_index >= len(self.data_manager.data):
@@ -816,7 +864,8 @@ class RunnerViewer(RunnerViewerMainWindow):
         
         self.populate_tree()
         self.show_entry(self.current_index)
-        self.select_tree_item_by_index(self.current_index)
+        # Maintain current selection since this is a brand/data propagation operation
+        self.maintain_current_tree_selection()
         self.mark_unsaved_changes()
         self.update_status_bar()
 
@@ -828,23 +877,45 @@ class RunnerViewer(RunnerViewerMainWindow):
         self.mark_unsaved_changes()
         self.update_status_bar()
         self.show_entry(self.current_index)  # Refresh display
+        # Maintain current selection after toggle
+        self.maintain_current_tree_selection()
 
     def _apply_changes(self) -> None:
         """Apply current changes using data manager."""
         if self._is_current_checked():
             return
         
-        bib_number = self.bib_number.text()
-        category = self.bib_category.currentText()
-        checked_brands = [chk.text() for chk in self.brand_checks if chk.isChecked()]
+        # Get current values
+        current_data = self.data_manager.data[self.current_index]
+        old_bib_number = ""
+        old_category = ""
+        run_data = current_data.get("run_data", {})
+        if isinstance(run_data, dict):
+            old_bib_number = str(run_data.get("bib_number", ""))
+            old_category = run_data.get("run_category", "")
+        
+        # Get new values
+        new_bib_number = self.get_bib_number_field().text()
+        new_category = self.get_bib_category_field().currentText()
+        checked_brands = [chk.text() for chk in self.get_brand_checks() if chk.isChecked()]
+        
+        # Check if bib number or category changed
+        bib_or_category_changed = (old_bib_number != new_bib_number) or (old_category != new_category)
         
         self.data_manager.save_state(self.current_index)
-        self.data_manager.update_image_data(self.current_index, bib_number, category, checked_brands)
+        self.data_manager.update_image_data(self.current_index, new_bib_number, new_category, checked_brands)
         
         self.mark_unsaved_changes()
         self.update_status_bar()
-        self.populate_tree()
-        self.select_next_tree_item()
+        
+        # Use appropriate selection strategy
+        if bib_or_category_changed:
+            # If bib or category changed, repopulate tree and select next item
+            self.populate_tree()
+            self.select_next_tree_item()
+        else:
+            # If only brands changed, maintain current selection
+            self.maintain_current_tree_selection()
 
     def _set_brand_by_key(self, key_char: str) -> None:
         """Set brand based on key shortcut."""
@@ -860,11 +931,29 @@ class RunnerViewer(RunnerViewerMainWindow):
             return
         
         # Update brand checkboxes
-        for chk in self.brand_checks:
+        for chk in self.get_brand_checks():
             chk.setChecked(chk.text() == target_brand)
         
-        # Apply changes
-        self._apply_changes()
+        # Apply changes - this is a brand-only change, so maintain selection
+        if self._is_current_checked():
+            return
+        
+        # Get current values (bib and category unchanged)
+        current_data = self.data_manager.data[self.current_index]
+        run_data = current_data.get("run_data", {})
+        bib_number = str(run_data.get("bib_number", "")) if isinstance(run_data, dict) else ""
+        category = run_data.get("run_category", "") if isinstance(run_data, dict) else ""
+        
+        # Get checked brands
+        checked_brands = [chk.text() for chk in self.get_brand_checks() if chk.isChecked()]
+        
+        self.data_manager.save_state(self.current_index)
+        self.data_manager.update_image_data(self.current_index, bib_number, category, checked_brands)
+        
+        self.mark_unsaved_changes()
+        self.update_status_bar()
+        # Maintain current selection since only brands changed
+        self.maintain_current_tree_selection()
 
     def _get_key_to_brand_mapping(self) -> Dict[str, str]:
         """Get key to brand mapping from config."""

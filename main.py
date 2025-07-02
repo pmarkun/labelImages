@@ -9,11 +9,11 @@ from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtGui import QKeyEvent
 from PyQt5.QtWidgets import QApplication, QCheckBox, QTreeWidgetItem, QMessageBox
 
-from .ui.main_window import RunnerViewerMainWindow
-from .ui.tree_widget import TreeManager
-from .ui.image_display import ImageDisplayManager, ExportManager
-from .core.data_manager import DataManager
-from .utils.config import load_config, save_config
+from ui.main_window import RunnerViewerMainWindow
+from ui.tree_widget import TreeManager
+from ui.image_display import ImageDisplayManager, ExportManager
+from core.data_manager import DataManager
+from utils.config import load_config, save_config
 
 
 DEFAULT_VIEWER_CONFIG = {
@@ -40,6 +40,7 @@ class RunnerViewerApp(QObject):
         self.current_index = 0
         self.brands: List[str] = []
         self.bib_categories: List[str] = []
+        self.genders: List[str] = []
         self.backup_done = False
         self.has_unsaved_changes = False
         
@@ -169,7 +170,7 @@ class RunnerViewerApp(QObject):
     def collect_stats(self) -> None:
         """Collect brands and categories from data."""
         config_labels = self.config.get("labels", [])
-        self.brands, self.bib_categories = self.data_manager.collect_stats(config_labels)
+        self.brands, self.bib_categories, self.genders = self.data_manager.collect_stats(config_labels)
         
         # Update UI components
         self._update_category_filter()
@@ -299,8 +300,8 @@ class RunnerViewerApp(QObject):
         """Update the status bar with progress."""
         stats = self.data_manager.get_progress_stats()
         self.main_window.update_status_bar(
-            stats['checked'], 
-            stats['total'], 
+            int(stats['checked']), 
+            int(stats['total']), 
             stats['percentage']
         )
     
@@ -432,10 +433,11 @@ class RunnerViewerApp(QObject):
             self.populate_tree()
             self.tree_manager.select_tree_item_by_index(self.current_index)
         
-        self.export_manager.on_shoe_click(
-            event, shoe_index, current_item, self.current_index,
-            save_state, mark_unsaved, refresh_display
-        )
+        if self.export_manager:
+            self.export_manager.on_shoe_click(
+                event, shoe_index, current_item, self.current_index,
+                save_state, mark_unsaved, refresh_display
+            )
     
     def _is_current_checked(self) -> bool:
         """Check if current image is checked."""

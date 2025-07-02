@@ -4,7 +4,7 @@ Tree widget management for the Runner Viewer application.
 from typing import List, Dict, Any, Optional
 from PyQt5.QtCore import Qt, QObject, pyqtSignal
 from PyQt5.QtWidgets import QTreeWidget, QTreeWidgetItem
-from ..core.models import DataCache, get_position_from_bib
+from core.models import DataCache, get_position_from_bib
 
 
 class TreeManager(QObject):

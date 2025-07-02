@@ -170,10 +170,9 @@ class RunnerViewerMainWindow(QMainWindow):
         main_splitter.addWidget(self.right_panel)
         
         # Set splitter proportions
-        main_splitter.setStretchFactor(0, 2)  # Left panel
+        main_splitter.setStretchFactor(0, 1)  # Left panel
         main_splitter.setStretchFactor(1, 3)  # Center panel (larger)
-        main_splitter.setStretchFactor(2, 1)  # Right panel
-        
+        main_splitter.setStretchFactor(2, 3)  # Right panel
         self.setCentralWidget(main_splitter)
     
     def _on_open_json(self) -> None:

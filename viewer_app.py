@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
 # Import modular components
 from core.data_manager import DataManager
 from core.models import DataCache, get_position_from_bib
+from ui.main_window import RunnerViewerMainWindow
 from ui.widgets import ClickableLabel
 from utils.config import load_config, save_config
 from utils.image_utils import crop_image, pil_to_qpixmap
@@ -44,14 +45,11 @@ DEFAULT_VIEWER_CONFIG = {
 }
 
 
-class RunnerViewer(QMainWindow):
+class RunnerViewer(RunnerViewerMainWindow):
     """Main application class for the Runner Viewer."""
     
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("🏃 Runner Data Viewer")
-        self.setup_styling()
-        self.setMinimumSize(800, 600)
         
         # Configuration
         self.config_path = os.path.join(os.getcwd(), "viewer_config.yaml")
@@ -69,319 +67,35 @@ class RunnerViewer(QMainWindow):
         self.backup_done = False
         self.has_unsaved_changes = False
         
-        # UI setup
-        self.setup_ui()
-        self.setup_menu()
-        
         # Cache for performance
         self.bib_cache = {}
         self._expansion_connected = False
-
-    def setup_styling(self) -> None:
-        """Apply modern styling to the application"""
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #f8f9fa;
-                color: #333;
-            }
-            QTreeWidget {
-                background-color: white;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                padding: 5px;
-                font-size: 13px;
-            }
-            QTreeWidget::item {
-                padding: 4px;
-                border-bottom: 1px solid #f0f0f0;
-            }
-            QTreeWidget::item:selected {
-                background-color: #007acc;
-                color: white;
-            }
-            QLabel {
-                color: #333;
-                font-size: 13px;
-            }
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #ddd;
-                border-radius: 8px;
-                margin: 10px 0px;
-                padding-top: 10px;
-                background-color: white;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-                color: #007acc;
-                font-size: 14px;
-            }
-            QLineEdit, QComboBox {
-                border: 2px solid #ddd;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 13px;
-                background-color: white;
-            }
-            QLineEdit:focus, QComboBox:focus {
-                border-color: #007acc;
-            }
-            QCheckBox {
-                spacing: 8px;
-                font-size: 12px;
-                padding: 4px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-            }
-            QCheckBox::indicator:unchecked {
-                border: 2px solid #ddd;
-                border-radius: 3px;
-                background-color: white;
-            }
-            QCheckBox::indicator:checked {
-                border: 2px solid #007acc;
-                border-radius: 3px;
-                background-color: #007acc;
-            }
-            QPushButton {
-                background-color: #007acc;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #005fa3;
-            }
-            QPushButton:pressed {
-                background-color: #004578;
-            }
-            QSplitter::handle {
-                background-color: #ddd;
-                width: 3px;
-            }
-            QScrollArea {
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                background-color: white;
-            }
-        """)
-
-    def setup_menu(self) -> None:
-        """Setup the application menu"""
-        open_json = QAction("📂 Abrir JSON", self)
-        open_json.triggered.connect(self.load_json)
-        open_json.setShortcut("Ctrl+O")
         
-        save_json = QAction("💾 Salvar", self)
-        save_json.triggered.connect(self.save_json)
-        save_json.setShortcut("Ctrl+S")
+        # Connect UI signals to handlers
+        self.connect_signals()
         
-        save_as_json = QAction("💾 Salvar Como...", self)
-        save_as_json.triggered.connect(self.save_as_json)
-        save_as_json.setShortcut("Ctrl+Shift+S")
-        
-        set_base = QAction("📁 Definir Base Path", self)
-        set_base.triggered.connect(self.select_base_path)
-        
-        menu = self.menuBar().addMenu("Arquivo")
-        menu.addAction(open_json)
-        menu.addSeparator()
-        menu.addAction(save_json)
-        menu.addAction(save_as_json)
-        menu.addSeparator()
-        menu.addAction(set_base)
-
-    def setup_ui(self) -> None:
-        """Setup the main user interface"""
-        # Create main splitter
-        main_splitter = QSplitter(Qt.Horizontal)
-        
-        # Left panel - Tree view
-        left_panel = self.create_left_panel()
-        
-        # Center panel - Image display
-        center_panel = self.create_center_panel()
-        
-        # Right panel - Details and controls
-        right_panel = self.create_right_panel()
-        
-        main_splitter.addWidget(left_panel)
-        main_splitter.addWidget(center_panel)
-        main_splitter.addWidget(right_panel)
-        
-        # Set splitter proportions
-        main_splitter.setStretchFactor(0, 2)  # Left panel
-        main_splitter.setStretchFactor(1, 3)  # Center panel (larger)
-        main_splitter.setStretchFactor(2, 1)  # Right panel
-        
-        self.setCentralWidget(main_splitter)
-        
-    def create_left_panel(self) -> QWidget:
-        """Create the left panel with tree view"""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(10)
-        layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Header
-        header = QLabel("📁 Navegação")
-        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #007acc; margin-bottom: 10px;")
-        layout.addWidget(header)
-        
-        # Filter section
-        filter_group = QGroupBox("Filtros")
-        filter_layout = QVBoxLayout(filter_group)
-        
-        # Category filter
-        filter_layout.addWidget(QLabel("Categoria:"))
-        self.category_filter = QComboBox()
-        self.category_filter.addItem("Todas as categorias")
-        self.category_filter.activated.connect(self.on_filter_changed)
-        filter_layout.addWidget(self.category_filter)
-        
-        self.filter_unchecked_only = QCheckBox("Mostrar apenas dorsais sem imagens checadas")
-        self.filter_unchecked_only.stateChanged.connect(self.on_filter_changed)
-        filter_layout.addWidget(self.filter_unchecked_only)
-        
-        layout.addWidget(filter_group)
-        
-        # Tree widget
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Categoria / Dorsal / Nome"])
-        self.tree.currentItemChanged.connect(self.on_item_selected)
         # Install event filter for keyboard events
-        self.tree.installEventFilter(self)
-        layout.addWidget(self.tree)
+        self.get_tree_widget().installEventFilter(self)
+
+    def connect_signals(self) -> None:
+        """Connect UI signals to their handlers."""
+        # Main window signals
+        self.json_load_requested.connect(self.load_json_file)
+        self.json_save_requested.connect(self.save_json)
+        self.json_save_as_requested.connect(self.save_as_json)
+        self.base_path_change_requested.connect(self.select_base_path)
         
-        return panel
+        # Panel signals
+        self.left_panel.filter_changed.connect(self.on_filter_changed)
+        self.left_panel.item_selected.connect(self.on_item_selected)
         
-    def create_center_panel(self) -> QWidget:
-        """Create the center panel with image displays"""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(15)
-        layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Header
-        header = QLabel("🖼️ Visualização de Imagens")
-        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #007acc; margin-bottom: 10px;")
-        layout.addWidget(header)
-        
-        # Original image thumbnail
-        thumb_group = QGroupBox("Imagem Original")
-        thumb_layout = QVBoxLayout()
-        self.thumb_label = QLabel()
-        self.thumb_label.setAlignment(Qt.AlignCenter)
-        self.thumb_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 20px; background-color: #f8f9fa;")
-        self.thumb_label.setMinimumHeight(200)
-        thumb_layout.addWidget(self.thumb_label)
-        
-        # Runner and shoes section
-        runner_group = QGroupBox("Corredor e Tênis")
-        runner_layout = QHBoxLayout(runner_group)
-        
-        # Runner image
-        runner_container = QVBoxLayout()
-        
-        self.runner_label = QLabel()
-        self.runner_label.setAlignment(Qt.AlignCenter)
-        self.runner_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 10px; background-color: #f8f9fa;")
-        self.runner_label.setMinimumHeight(300)
-        runner_container.addWidget(self.runner_label)
-        
-        # Shoes section
-        shoes_container = QVBoxLayout()
-        
-        shoes_scroll = QScrollArea()
-        shoes_scroll.setWidgetResizable(True)
-        shoes_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        shoes_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
-        self.shoe_container = QWidget()
-        self.shoe_box = QVBoxLayout(self.shoe_container)
-        self.shoe_box.setSpacing(5)
-        self.shoe_box.setContentsMargins(5, 5, 5, 5)
-        shoes_scroll.setWidget(self.shoe_container)
-        shoes_scroll.setMaximumWidth(300)
-        shoes_scroll.setMinimumHeight(400)
-        shoes_container.addWidget(shoes_scroll)
-        
-        runner_layout.addLayout(thumb_layout, 1)
-        runner_layout.addLayout(runner_container, 2)
-        runner_layout.addLayout(shoes_container, 2)
-        layout.addWidget(runner_group)
-        
-        return panel
-        
-    def create_right_panel(self) -> QWidget:
-        """Create the right panel with details and controls"""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(15)
-        layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Header
-        header = QLabel("⚙️ Detalhes e Edição")
-        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #007acc; margin-bottom: 10px;")
-        layout.addWidget(header)
-        
-        # Bib information group
-        bib_group = QGroupBox("Informações do Dorsal")
-        bib_layout = QVBoxLayout(bib_group)
-        
-        # Bib number
-        bib_layout.addWidget(QLabel("Número do Dorsal:"))
-        self.bib_number = QLineEdit()
-        self.bib_number.setPlaceholderText("Digite o número...")
-        self.bib_number.returnPressed.connect(self.on_bib_number_enter)
-        bib_layout.addWidget(self.bib_number)
-        
-        # Bib category
-        bib_layout.addWidget(QLabel("Categoria:"))
-        self.bib_category = QComboBox()
-        self.bib_category.activated.connect(self.on_category_selected)
-        bib_layout.addWidget(self.bib_category)
-        
-        layout.addWidget(bib_group)
-        
-        # Brand selection group
-        brand_group = QGroupBox("Marcas dos Tênis")
-        brand_layout = QVBoxLayout(brand_group)
-        
-        # Create scrollable area for brands
-        brand_scroll = QScrollArea()
-        brand_scroll.setWidgetResizable(True)
-        brand_scroll.setMinimumHeight(350)
-        brand_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
-        self.brand_panel = QWidget()
-        self.brand_layout = QGridLayout(self.brand_panel)
-        self.brand_layout.setSpacing(5)
-        self.brand_checks: List[QCheckBox] = []
-        
-        brand_scroll.setWidget(self.brand_panel)
-        brand_layout.addWidget(brand_scroll)
-        layout.addWidget(brand_group)
-        
-        # Add stretch to push everything to top
-        layout.addStretch()
-        
-        return panel
+        self.right_panel.bib_number_entered.connect(self.on_bib_number_enter)
+        self.right_panel.category_selected.connect(self.on_category_selected)
+        self.right_panel.brand_changed.connect(self.on_brand_changed_immediate)
 
     # Data operations using the new data manager
-    def load_json(self) -> None:
+    def load_json_file(self, path: str) -> None:
         """Load JSON data file using the data manager."""
-        path, _ = QFileDialog.getOpenFileName(self, "JSON", filter="JSON Files (*.json)")
-        if not path:
-            return
-        
         try:
             self.json_path = path
             self.data_manager.load_json(path)
@@ -393,7 +107,7 @@ class RunnerViewer(QMainWindow):
             self.populate_tree()
             self.show_entry(0)
             self.update_status_bar()
-            self.update_window_title()
+            self.update_window_title(self.json_path, self.has_unsaved_changes)
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load JSON: {e}")
@@ -404,39 +118,35 @@ class RunnerViewer(QMainWindow):
         self.brands, self.bib_categories = self.data_manager.collect_stats(config_labels)
 
         # Update UI components
-        self.bib_category.clear()
-        self.bib_category.addItems(self.bib_categories)
+        bib_category = self.get_bib_category_field()
+        bib_category.clear()
+        bib_category.addItems(self.bib_categories)
         
         # Update category filter
-        self.category_filter.clear()
-        self.category_filter.addItem("Todas as categorias")
-        self.category_filter.addItems(self.bib_categories)
+        category_filter = self.get_category_filter()
+        category_filter.clear()
+        category_filter.addItem("Todas as categorias")
+        category_filter.addItems(self.bib_categories)
 
-        # Setup brand checkboxes
-        for chk in self.brand_checks:
-            chk.deleteLater()
-        self.brand_checks = []
+        # Setup brand checkboxes using the right panel
+        self.right_panel.setup_brand_checkboxes(self.brands)
         
-        # Organize brands in two columns
-        for i, b in enumerate(self.brands):
-            cb = QCheckBox(b)
-            cb.stateChanged.connect(self.on_brand_changed_immediate)
-            row = i // 2
-            col = i % 2
-            self.brand_layout.addWidget(cb, row, col)
-            self.brand_checks.append(cb)
+        # Setup shortcuts info
+        self.right_panel.setup_shortcuts_info(config_labels)
 
     def populate_tree(self) -> None:
         """Populate tree using the new cache system."""
-        self.tree.clear()
+        tree = self.get_tree_widget()
+        tree.clear()
         
         # Get selected category filter
-        selected_category = self.category_filter.currentText()
+        category_filter = self.get_category_filter()
+        selected_category = category_filter.currentText()
         if selected_category == "Todas as categorias":
             selected_category = None
         
         # Check if we should filter for unchecked only
-        filter_unchecked_only = self.filter_unchecked_only.isChecked()
+        filter_unchecked_only = self.get_filter_unchecked_only().isChecked()
         
         # Get relevant cache entries for the selected category
         relevant_bibs = []
@@ -472,7 +182,7 @@ class RunnerViewer(QMainWindow):
             else:
                 bib_text = f"{position}. {gender} ({bib_number})"
             
-            bib_node = QTreeWidgetItem(self.tree, [bib_text])
+            bib_node = QTreeWidgetItem(tree, [bib_text])
             
             # Store the best image index as the bib node's data
             bib_node.setData(0, Qt.UserRole, cache_data['index'])
@@ -485,11 +195,11 @@ class RunnerViewer(QMainWindow):
             
         # Connect the tree expansion signal to load children on demand
         if not self._expansion_connected:
-            self.tree.itemExpanded.connect(self.on_tree_item_expanded)
+            tree.itemExpanded.connect(self.on_tree_item_expanded)
             self._expansion_connected = True
         
         # Keep tree collapsed by default
-        self.tree.collapseAll()
+        tree.collapseAll()
 
     def show_entry(self, index: int) -> None:
         """Display entry using new image utilities."""
@@ -517,23 +227,25 @@ class RunnerViewer(QMainWindow):
         thumb_img = img.resize((150, int(150*img.height/img.width)))
         thumb_pixmap = pil_to_qpixmap(thumb_img)
         
+        thumb_label = self.get_thumb_label()
         if is_checked:
-            self.thumb_label.setStyleSheet("border: 4px solid #28a745; border-radius: 8px; padding: 16px; background-color: #d4edda;")
+            thumb_label.setStyleSheet("border: 4px solid #28a745; border-radius: 8px; padding: 16px; background-color: #d4edda;")
         else:
-            self.thumb_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 20px; background-color: #f8f9fa;")
+            thumb_label.setStyleSheet("border: 2px dashed #ddd; border-radius: 8px; padding: 20px; background-color: #f8f9fa;")
         
-        self.thumb_label.setPixmap(thumb_pixmap)
+        thumb_label.setPixmap(thumb_pixmap)
         
         # Display runner crop
         bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, img.width, img.height])
         runner = crop_image(img, bbox)
-        target_width, target_height = self.runner_label.width(), self.runner_label.height()
+        runner_label = self.get_runner_label()
+        target_width, target_height = runner_label.width(), runner_label.height()
         width_ratio = target_width / runner.width * 0.95
         height_ratio = target_height / runner.height * 0.95
         scale_ratio = min(width_ratio, height_ratio)
         runner_img = runner.resize((int(runner.width * scale_ratio), int(runner.height * scale_ratio)))
         runner_pixmap = pil_to_qpixmap(runner_img)
-        self.runner_label.setPixmap(runner_pixmap)
+        runner_label.setPixmap(runner_pixmap)
 
         # Display shoes
         self._display_shoes(img, data_item)
@@ -547,8 +259,9 @@ class RunnerViewer(QMainWindow):
     def _display_shoes(self, img: Image.Image, data_item: Dict[str, Any]) -> None:
         """Display shoes using the new system."""
         # Clear existing shoes
-        for i in reversed(range(self.shoe_box.count())):
-            layout_item = self.shoe_box.itemAt(i)
+        shoe_layout = self.get_shoe_layout()
+        for i in reversed(range(shoe_layout.count())):
+            layout_item = shoe_layout.itemAt(i)
             if layout_item:
                 w = layout_item.widget()
                 if w:
@@ -561,16 +274,17 @@ class RunnerViewer(QMainWindow):
             return
         
         # Calculate container dimensions
-        container_height = self.shoe_container.height()
+        shoe_container = self.get_shoe_container()
+        container_height = shoe_container.height()
         container_width = 270
         
-        self.shoe_container.setMinimumHeight(container_height)
-        self.shoe_container.setMaximumHeight(container_height)
+        shoe_container.setMinimumHeight(container_height)
+        shoe_container.setMaximumHeight(container_height)
         
         # Calculate available space per shoe
         label_height = 20
         widget_margins = 10
-        layout_spacing = self.shoe_box.spacing() * max(0, num_shoes - 1)
+        layout_spacing = shoe_layout.spacing() * max(0, num_shoes - 1)
         total_reserved_height = num_shoes * (label_height + widget_margins) + layout_spacing + 30
         
         available_height_per_shoe = max((container_height - total_reserved_height) / num_shoes, 40)
@@ -598,8 +312,8 @@ class RunnerViewer(QMainWindow):
                     
                     # Create shoe widget container
                     shoe_widget = QWidget()
-                    shoe_layout = QVBoxLayout(shoe_widget)
-                    shoe_layout.setContentsMargins(5, 5, 5, 5)
+                    shoe_widget_layout = QVBoxLayout(shoe_widget)
+                    shoe_widget_layout.setContentsMargins(5, 5, 5, 5)
                     
                     # Add brand label
                     brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
@@ -607,7 +321,7 @@ class RunnerViewer(QMainWindow):
                         brand_lbl = QLabel(brand)
                         brand_lbl.setStyleSheet("font-size: 11px; color: #666; font-weight: bold;")
                         brand_lbl.setAlignment(Qt.AlignCenter)
-                        shoe_layout.addWidget(brand_lbl)
+                        shoe_widget_layout.addWidget(brand_lbl)
                     
                     # Create clickable shoe label
                     lbl = ClickableLabel(shoe_index=shoe_index, callback=self.on_shoe_click)
@@ -615,11 +329,11 @@ class RunnerViewer(QMainWindow):
                     lbl.setStyleSheet("border: 1px solid #ddd; border-radius: 4px; padding: 2px; cursor: pointer;")
                     lbl.setAlignment(Qt.AlignCenter)
                     
-                    shoe_layout.addWidget(lbl)
-                    shoe_layout.addStretch()
+                    shoe_widget_layout.addWidget(lbl)
+                    shoe_widget_layout.addStretch()
                     
                     shoe_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-                    self.shoe_box.addWidget(shoe_widget)
+                    shoe_layout.addWidget(shoe_widget)
                     
                 except Exception as e:
                     print(f"Error processing shoe image: {e}")
@@ -640,17 +354,20 @@ class RunnerViewer(QMainWindow):
         self._disconnect_right_panel_signals()
         
         # Update fields
-        self.bib_number.setText(bib_number)
-        self.bib_number.setEnabled(not is_checked)
+        bib_number_field = self.get_bib_number_field()
+        bib_number_field.setText(bib_number)
+        bib_number_field.setEnabled(not is_checked)
         
+        bib_category_field = self.get_bib_category_field()
         if category and category in self.bib_categories:
-            self.bib_category.setCurrentText(category)
+            bib_category_field.setCurrentText(category)
         else:
-            self.bib_category.setCurrentIndex(-1)
-        self.bib_category.setEnabled(not is_checked)
+            bib_category_field.setCurrentIndex(-1)
+        bib_category_field.setEnabled(not is_checked)
         
         # Update brand checkboxes
-        for chk in self.brand_checks:
+        brand_checks = self.get_brand_checks()
+        for chk in brand_checks:
             chk.setChecked(False)
             chk.setEnabled(not is_checked)
         
@@ -661,7 +378,7 @@ class RunnerViewer(QMainWindow):
             if brand:
                 brands_present.add(brand)
         
-        for chk in self.brand_checks:
+        for chk in brand_checks:
             if chk.text() in brands_present:
                 chk.setChecked(True)
         
@@ -671,25 +388,23 @@ class RunnerViewer(QMainWindow):
     def _disconnect_right_panel_signals(self) -> None:
         """Temporarily disconnect right panel signals."""
         try:
-            self.bib_number.returnPressed.disconnect()
+            self.right_panel.bib_number_entered.disconnect()
         except:
             pass
         try:
-            self.bib_category.activated.disconnect()
+            self.right_panel.category_selected.disconnect()
         except:
             pass
-        for chk in self.brand_checks:
-            try:
-                chk.stateChanged.disconnect()
-            except:
-                pass
+        try:
+            self.right_panel.brand_changed.disconnect()
+        except:
+            pass
 
     def _reconnect_right_panel_signals(self) -> None:
         """Reconnect right panel signals."""
-        self.bib_number.returnPressed.connect(self.on_bib_number_enter)
-        self.bib_category.activated.connect(self.on_category_selected)
-        for chk in self.brand_checks:
-            chk.stateChanged.connect(self.on_brand_changed_immediate)
+        self.right_panel.bib_number_entered.connect(self.on_bib_number_enter)
+        self.right_panel.category_selected.connect(self.on_category_selected)
+        self.right_panel.brand_changed.connect(self.on_brand_changed_immediate)
 
     # Save operations using data manager
     def save_json(self) -> None:
@@ -705,7 +420,7 @@ class RunnerViewer(QMainWindow):
             
             self.data_manager.save_json(self.json_path, backup=False)
             self.has_unsaved_changes = False
-            self.update_window_title()
+            super().update_window_title(self.json_path, self.has_unsaved_changes)
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save: {e}")
@@ -722,7 +437,7 @@ class RunnerViewer(QMainWindow):
                 self.json_path = path
                 self.backup_done = False
                 self.has_unsaved_changes = False
-                self.update_window_title()
+                super().update_window_title(self.json_path, self.has_unsaved_changes)
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
@@ -730,24 +445,13 @@ class RunnerViewer(QMainWindow):
     def update_status_bar(self) -> None:
         """Update status bar using data manager stats."""
         stats = self.data_manager.get_progress_stats()
-        status_text = f"✓ Checadas: {int(stats['checked'])} | Total: {int(stats['total'])} | Progresso: {stats['percentage']:.1f}%"
-        self.statusBar().showMessage(status_text)
-
-    def update_window_title(self) -> None:
-        """Update window title with file info and unsaved changes indicator."""
-        title = "🏃 Runner Data Viewer"
-        if self.json_path:
-            filename = os.path.basename(self.json_path)
-            title += f" - {filename}"
-        if self.has_unsaved_changes:
-            title += " *"
-        self.setWindowTitle(title)
+        super().update_status_bar(int(stats['checked']), int(stats['total']), stats['percentage'])
 
     def mark_unsaved_changes(self) -> None:
         """Mark that there are unsaved changes."""
         if not self.has_unsaved_changes:
             self.has_unsaved_changes = True
-            self.update_window_title()
+            super().update_window_title(self.json_path, self.has_unsaved_changes)
 
     # Event handlers
     def on_item_selected(self, current: QTreeWidgetItem, previous=None) -> None:
@@ -763,10 +467,11 @@ class RunnerViewer(QMainWindow):
         if self.data_manager.data:
             self.populate_tree()
             # Select first item if available
-            if self.tree.topLevelItemCount() > 0:
-                first_item = self.tree.topLevelItem(0)
+            tree = self.get_tree_widget()
+            if tree.topLevelItemCount() > 0:
+                first_item = tree.topLevelItem(0)
                 if first_item:
-                    self.tree.setCurrentItem(first_item)
+                    tree.setCurrentItem(first_item)
                     self.on_item_selected(first_item, None)
 
     def on_bib_number_enter(self) -> None:
@@ -777,7 +482,8 @@ class RunnerViewer(QMainWindow):
         if self._is_current_checked():
             return
         
-        bib_text = self.bib_number.text()
+        bib_number_field = self.get_bib_number_field()
+        bib_text = bib_number_field.text()
         
         # Save state for undo
         self.data_manager.save_state(self.current_index)
@@ -799,7 +505,8 @@ class RunnerViewer(QMainWindow):
         if self._is_current_checked():
             return
         
-        category_text = self.bib_category.currentText()
+        bib_category_field = self.get_bib_category_field()
+        category_text = bib_category_field.currentText()
         if not category_text:
             return
         
@@ -824,16 +531,19 @@ class RunnerViewer(QMainWindow):
             return
         
         # Get checked brands
-        checked_brands = [chk.text() for chk in self.brand_checks if chk.isChecked()]
+        brand_checks = self.get_brand_checks()
+        checked_brands = [chk.text() for chk in brand_checks if chk.isChecked()]
         
         # Save state for undo
         self.data_manager.save_state(self.current_index)
         
         # Update data using data manager
+        bib_number_field = self.get_bib_number_field()
+        bib_category_field = self.get_bib_category_field()
         self.data_manager.update_image_data(
             self.current_index, 
-            self.bib_number.text(),
-            self.bib_category.currentText(),
+            bib_number_field.text(),
+            bib_category_field.currentText(),
             checked_brands
         )
         
@@ -953,6 +663,8 @@ class RunnerViewer(QMainWindow):
         """Select tree item by data index."""
         if data_index < 0 or data_index >= len(self.data_manager.data):
             return
+        
+        tree = self.get_tree_widget()
             
         def find_item_with_index(item: QTreeWidgetItem, target_index: int):
             # Check if this item has the target index
@@ -970,12 +682,12 @@ class RunnerViewer(QMainWindow):
             return None
         
         # Search through all top-level items (bib nodes)
-        for i in range(self.tree.topLevelItemCount()):
-            bib_item = self.tree.topLevelItem(i)
+        for i in range(tree.topLevelItemCount()):
+            bib_item = tree.topLevelItem(i)
             if bib_item:
                 # Check if this bib node itself has the target index (best image)
                 if bib_item.data(0, Qt.UserRole) == data_index:
-                    self.tree.setCurrentItem(bib_item)
+                    tree.setCurrentItem(bib_item)
                     return
                 
                 # Search in children (if expanded)
@@ -984,18 +696,19 @@ class RunnerViewer(QMainWindow):
                     # Expand the parent if needed
                     if not bib_item.isExpanded():
                         bib_item.setExpanded(True)
-                    self.tree.setCurrentItem(result)
+                    tree.setCurrentItem(result)
                     return
 
     def select_next_tree_item(self) -> None:
         """Select the next item in the tree after current operations."""
-        current_item = self.tree.currentItem()
+        tree = self.get_tree_widget()
+        current_item = tree.currentItem()
         if not current_item:
             # If no current item, select the first one
-            if self.tree.topLevelItemCount() > 0:
-                first_item = self.tree.topLevelItem(0)
+            if tree.topLevelItemCount() > 0:
+                first_item = tree.topLevelItem(0)
                 if first_item:
-                    self.tree.setCurrentItem(first_item)
+                    tree.setCurrentItem(first_item)
                     self.on_item_selected(first_item, None)
             return
         
@@ -1015,26 +728,26 @@ class RunnerViewer(QMainWindow):
                     next_item = parent.child(current_index + 1)
                 else:
                     # No more siblings, find parent's next sibling
-                    parent_index = self.tree.indexOfTopLevelItem(parent)
-                    if parent_index + 1 < self.tree.topLevelItemCount():
-                        next_item = self.tree.topLevelItem(parent_index + 1)
+                    parent_index = tree.indexOfTopLevelItem(parent)
+                    if parent_index + 1 < tree.topLevelItemCount():
+                        next_item = tree.topLevelItem(parent_index + 1)
             else:
                 # We're at top level, find next top level item
-                current_index = self.tree.indexOfTopLevelItem(current_item)
-                if current_index + 1 < self.tree.topLevelItemCount():
-                    next_item = self.tree.topLevelItem(current_index + 1)
+                current_index = tree.indexOfTopLevelItem(current_item)
+                if current_index + 1 < tree.topLevelItemCount():
+                    next_item = tree.topLevelItem(current_index + 1)
         
         # If we found a next item, select it
         if next_item:
-            self.tree.setCurrentItem(next_item)
+            tree.setCurrentItem(next_item)
             # Trigger selection to update display
             self.on_item_selected(next_item, current_item)
         else:
             # No next item found, stay on current or go to last available
-            if self.tree.topLevelItemCount() > 0:
-                last_item = self.tree.topLevelItem(self.tree.topLevelItemCount() - 1)
+            if tree.topLevelItemCount() > 0:
+                last_item = tree.topLevelItem(tree.topLevelItemCount() - 1)
                 if last_item:
-                    self.tree.setCurrentItem(last_item)
+                    tree.setCurrentItem(last_item)
                     self.on_item_selected(last_item, current_item)
 
     def _is_current_checked(self) -> bool:
@@ -1046,7 +759,8 @@ class RunnerViewer(QMainWindow):
     # Keyboard handling (simplified for now, could be moved to a separate handler)
     def eventFilter(self, source, event):
         """Handle keyboard events for the tree widget."""
-        if source == self.tree and event.type() == QEvent.KeyPress:
+        tree = self.get_tree_widget()
+        if source == tree and event.type() == QEvent.KeyPress:
             key = event.key()
             modifiers = event.modifiers()
             key_text = event.text().lower()
@@ -1320,19 +1034,14 @@ class RunnerViewer(QMainWindow):
     def closeEvent(self, event):
         """Handle application close event."""
         if self.has_unsaved_changes:
-            reply = QMessageBox.question(
-                self, 
-                "Mudanças não salvas", 
-                "Você tem mudanças não salvas. Deseja salvar antes de sair?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
-            )
+            choice = super().show_unsaved_changes_dialog()
             
-            if reply == QMessageBox.Save:
+            if choice == "save":
                 self.save_json()
                 event.accept()
-            elif reply == QMessageBox.Discard:
+            elif choice == "discard":
                 event.accept()
-            else:  # Cancel
+            else:  # cancel
                 event.ignore()
         else:
             event.accept()

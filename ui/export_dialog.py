@@ -38,12 +38,13 @@ class ExportWorker(QThread):
             # Filter data if only checked items should be exported
             data_to_process = []
             if self.only_checked:
+                # In the new format, 'checked' is at participant level
                 data_to_process = [item for item in self.data if item.get('checked', False)]
             else:
                 data_to_process = self.data
             
             total_items = len(data_to_process)
-            self.message.emit(f"Processando {total_items} imagens...")
+            self.message.emit(f"Processando {total_items} participantes...")
             
             for i, item in enumerate(data_to_process):
                 if self.export_types.get('shoes_classification', False):
@@ -72,42 +73,52 @@ class ExportWorker(QThread):
             from PIL import Image
             from utils.image_utils import crop_image
             
-            img_filename = item.get("filename") or item.get("image_path", "")
-            if not img_filename:
+            # Get runners from the new format
+            runners_found = item.get("runners_found", [])
+            if not runners_found:
                 return
             
-            img_path = os.path.join(self.base_path, img_filename)
-            if not os.path.exists(img_path):
-                return
-            
-            img = Image.open(img_path)
-            shoes = item.get("shoes", [])
-            
-            for i, shoe in enumerate(shoes):
-                # Check confidence threshold
-                confidence = shoe.get("confidence", 1.0)
-                if confidence < self.confidence_values.get('shoes', 0.5):
+            # Process each runner
+            for runner_index, runner in enumerate(runners_found):
+                img_filename = runner.get("image_path", "")
+                if not img_filename:
                     continue
                 
-                brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
-                if not brand:
+                img_path = os.path.join(self.base_path, img_filename)
+                if not os.path.exists(img_path):
                     continue
                 
-                shoe_bbox = shoe.get("bbox")
-                if not shoe_bbox or len(shoe_bbox) < 4:
-                    continue
+                img = Image.open(img_path)
+                shoes = runner.get("shoes", [])
                 
-                # Crop and save
-                shoe_crop = crop_image(img, shoe_bbox)
-                brand_dir = os.path.join(self.output_path, "shoes_classification", brand)
-                os.makedirs(brand_dir, exist_ok=True)
-                
-                base_name = os.path.splitext(os.path.basename(img_filename))[0]
-                shoe_filename = f"crop_{base_name}_img{item_index}_shoe_{i}.jpg"
-                output_file = os.path.join(brand_dir, shoe_filename)
-                
-                shoe_crop.save(output_file, "JPEG", quality=95)
-                self.total_exported += 1
+                for shoe_index, shoe in enumerate(shoes):
+                    # Check confidence threshold
+                    confidence = shoe.get("confidence", 1.0)
+                    if confidence < self.confidence_values.get('shoes', 0.5):
+                        continue
+                    
+                    # Get brand with priority: classification_label > new_label > label
+                    brand = (shoe.get("classification_label") or 
+                            shoe.get("new_label") or 
+                            shoe.get("label", ""))
+                    if not brand:
+                        continue
+                    
+                    shoe_bbox = shoe.get("bbox")
+                    if not shoe_bbox or len(shoe_bbox) < 4:
+                        continue
+                    
+                    # Crop and save
+                    shoe_crop = crop_image(img, shoe_bbox)
+                    brand_dir = os.path.join(self.output_path, "shoes_classification", brand)
+                    os.makedirs(brand_dir, exist_ok=True)
+                    
+                    base_name = os.path.splitext(os.path.basename(img_filename))[0]
+                    shoe_filename = f"crop_{base_name}_item{item_index}_runner{runner_index}_shoe_{shoe_index}.jpg"
+                    output_file = os.path.join(brand_dir, shoe_filename)
+                    
+                    shoe_crop.save(output_file, "JPEG", quality=95)
+                    self.total_exported += 1
                 
         except Exception as e:
             self.message.emit(f"Erro exportando sapatos classificação: {str(e)}")
@@ -115,55 +126,70 @@ class ExportWorker(QThread):
     def _export_shoes_yolo(self, item: Dict[str, Any], item_index: int):
         """Export shoes in YOLO format."""
         try:
-            img_filename = item.get("filename") or item.get("image_path", "")
-            if not img_filename:
+            # Get runners from the new format
+            runners_found = item.get("runners_found", [])
+            if not runners_found:
                 return
             
-            shoes = item.get("shoes", [])
-            valid_shoes = []
-            
-            for shoe in shoes:
-                confidence = shoe.get("confidence", 1.0)
-                if confidence >= self.confidence_values.get('shoes', 0.5):
-                    valid_shoes.append(shoe)
-            
-            if not valid_shoes:
-                return
-            
-            # Create YOLO format directories
-            images_dir = os.path.join(self.output_path, "shoes_yolo", "images")
-            labels_dir = os.path.join(self.output_path, "shoes_yolo", "labels")
-            os.makedirs(images_dir, exist_ok=True)
-            os.makedirs(labels_dir, exist_ok=True)
-            
-            # Copy image
-            img_src = os.path.join(self.base_path, img_filename)
-            if os.path.exists(img_src):
-                import shutil
-                base_name = os.path.splitext(os.path.basename(img_filename))[0]
-                img_dst = os.path.join(images_dir, f"{base_name}.jpg")
-                shutil.copy2(img_src, img_dst)
+            # Process each runner
+            for runner_index, runner in enumerate(runners_found):
+                img_filename = runner.get("image_path", "")
+                if not img_filename:
+                    continue
                 
-                # Create label file
-                label_file = os.path.join(labels_dir, f"{base_name}.txt")
-                with open(label_file, 'w') as f:
-                    for shoe in valid_shoes:
-                        bbox = shoe.get("bbox")
-                        if bbox and len(bbox) >= 4:
-                            # Convert to YOLO format (normalized coordinates)
-                            img_width = item.get("image_width", 1)
-                            img_height = item.get("image_height", 1)
-                            
-                            x, y, w, h = bbox
-                            center_x = (x + w/2) / img_width
-                            center_y = (y + h/2) / img_height
-                            norm_w = w / img_width
-                            norm_h = h / img_height
-                            
-                            # Class 0 for shoes
-                            f.write(f"0 {center_x:.6f} {center_y:.6f} {norm_w:.6f} {norm_h:.6f}\n")
+                shoes = runner.get("shoes", [])
+                valid_shoes = []
                 
-                self.total_exported += 1
+                for shoe in shoes:
+                    confidence = shoe.get("confidence", 1.0)
+                    if confidence >= self.confidence_values.get('shoes', 0.5):
+                        valid_shoes.append(shoe)
+                
+                if not valid_shoes:
+                    continue
+                
+                # Create YOLO format directories
+                images_dir = os.path.join(self.output_path, "shoes_yolo", "images")
+                labels_dir = os.path.join(self.output_path, "shoes_yolo", "labels")
+                os.makedirs(images_dir, exist_ok=True)
+                os.makedirs(labels_dir, exist_ok=True)
+                
+                # Copy image
+                img_src = os.path.join(self.base_path, img_filename)
+                if os.path.exists(img_src):
+                    import shutil
+                    base_name = os.path.splitext(os.path.basename(img_filename))[0]
+                    # Include runner index to avoid filename conflicts
+                    img_dst = os.path.join(images_dir, f"{base_name}_runner{runner_index}.jpg")
+                    shutil.copy2(img_src, img_dst)
+                    
+                    # Create label file
+                    label_file = os.path.join(labels_dir, f"{base_name}_runner{runner_index}.txt")
+                    with open(label_file, 'w') as f:
+                        for shoe in valid_shoes:
+                            bbox = shoe.get("bbox")
+                            if bbox and len(bbox) >= 4:
+                                # Get image dimensions from runner or estimate
+                                img_width = runner.get("image_width")
+                                img_height = runner.get("image_height")
+                                
+                                # If dimensions not available, read from image
+                                if not img_width or not img_height:
+                                    from PIL import Image
+                                    with Image.open(img_src) as img:
+                                        img_width, img_height = img.size
+                                
+                                # Convert to YOLO format (normalized coordinates)
+                                x, y, w, h = bbox
+                                center_x = (x + w/2) / img_width
+                                center_y = (y + h/2) / img_height
+                                norm_w = w / img_width
+                                norm_h = h / img_height
+                                
+                                # Class 0 for shoes
+                                f.write(f"0 {center_x:.6f} {center_y:.6f} {norm_w:.6f} {norm_h:.6f}\n")
+                    
+                    self.total_exported += 1
                 
         except Exception as e:
             self.message.emit(f"Erro exportando sapatos YOLO: {str(e)}")
@@ -171,54 +197,69 @@ class ExportWorker(QThread):
     def _export_chest_plate_yolo(self, item: Dict[str, Any], item_index: int):
         """Export chest plates in YOLO format."""
         try:
-            img_filename = item.get("filename") or item.get("image_path", "")
-            if not img_filename:
+            # Get runners from the new format
+            runners_found = item.get("runners_found", [])
+            if not runners_found:
                 return
             
-            # Look for chest plate detection
-            chest_plate = item.get("chest_plate")
-            if not chest_plate:
-                return
-            
-            confidence = chest_plate.get("confidence", 1.0)
-            if confidence < self.confidence_values.get('chest_plate', 0.5):
-                return
-            
-            bbox = chest_plate.get("bbox")
-            if not bbox or len(bbox) < 4:
-                return
-            
-            # Create YOLO format directories
-            images_dir = os.path.join(self.output_path, "chest_plate_yolo", "images")
-            labels_dir = os.path.join(self.output_path, "chest_plate_yolo", "labels")
-            os.makedirs(images_dir, exist_ok=True)
-            os.makedirs(labels_dir, exist_ok=True)
-            
-            # Copy image
-            img_src = os.path.join(self.base_path, img_filename)
-            if os.path.exists(img_src):
-                import shutil
-                base_name = os.path.splitext(os.path.basename(img_filename))[0]
-                img_dst = os.path.join(images_dir, f"{base_name}.jpg")
-                shutil.copy2(img_src, img_dst)
+            # Process each runner
+            for runner_index, runner in enumerate(runners_found):
+                img_filename = runner.get("image_path", "")
+                if not img_filename:
+                    continue
                 
-                # Create label file
-                label_file = os.path.join(labels_dir, f"{base_name}.txt")
-                with open(label_file, 'w') as f:
-                    # Convert to YOLO format
-                    img_width = item.get("image_width", 1)
-                    img_height = item.get("image_height", 1)
-                    
-                    x, y, w, h = bbox
-                    center_x = (x + w/2) / img_width
-                    center_y = (y + h/2) / img_height
-                    norm_w = w / img_width
-                    norm_h = h / img_height
-                    
-                    # Class 0 for chest plate
-                    f.write(f"0 {center_x:.6f} {center_y:.6f} {norm_w:.6f} {norm_h:.6f}\n")
+                # Look for chest plate detection in this runner
+                chest_plate = runner.get("chest_plate")
+                if not chest_plate:
+                    continue
                 
-                self.total_exported += 1
+                confidence = chest_plate.get("confidence", 1.0)
+                if confidence < self.confidence_values.get('chest_plate', 0.5):
+                    continue
+                
+                bbox = chest_plate.get("bbox")
+                if not bbox or len(bbox) < 4:
+                    continue
+                
+                # Create YOLO format directories
+                images_dir = os.path.join(self.output_path, "chest_plate_yolo", "images")
+                labels_dir = os.path.join(self.output_path, "chest_plate_yolo", "labels")
+                os.makedirs(images_dir, exist_ok=True)
+                os.makedirs(labels_dir, exist_ok=True)
+                
+                # Copy image
+                img_src = os.path.join(self.base_path, img_filename)
+                if os.path.exists(img_src):
+                    import shutil
+                    base_name = os.path.splitext(os.path.basename(img_filename))[0]
+                    # Include runner index to avoid filename conflicts
+                    img_dst = os.path.join(images_dir, f"{base_name}_runner{runner_index}.jpg")
+                    shutil.copy2(img_src, img_dst)
+                    
+                    # Create label file
+                    label_file = os.path.join(labels_dir, f"{base_name}_runner{runner_index}.txt")
+                    with open(label_file, 'w') as f:
+                        # Get image dimensions from runner or read from image
+                        img_width = runner.get("image_width")
+                        img_height = runner.get("image_height")
+                        
+                        # If dimensions not available, read from image
+                        if not img_width or not img_height:
+                            from PIL import Image
+                            with Image.open(img_src) as img:
+                                img_width, img_height = img.size
+                        
+                        # Convert to YOLO format
+                        x, y, w, h = bbox
+                        center_x = (x + w/2) / img_width
+                        center_y = (y + h/2) / img_height
+                        norm_w = w / img_width
+                        norm_h = h / img_height
+                        
+                        # Class 0 for chest plate
+                        f.write(f"0 {center_x:.6f} {center_y:.6f} {norm_w:.6f} {norm_h:.6f}\n")
+                    
+                    self.total_exported += 1
                 
         except Exception as e:
             self.message.emit(f"Erro exportando placa de peito YOLO: {str(e)}")
@@ -277,7 +318,7 @@ class ExportDialog(QDialog):
         
         # Shoes confidence
         confidence_layout.addWidget(QLabel("Sapatos:"), 0, 0)
-        self.shoes_confidence_slider = QSlider(Qt.Horizontal)
+        self.shoes_confidence_slider = QSlider(Qt.Orientation.Horizontal)
         self.shoes_confidence_slider.setRange(0, 100)
         self.shoes_confidence_slider.setValue(50)
         self.shoes_confidence_label = QLabel("0.50")
@@ -286,7 +327,7 @@ class ExportDialog(QDialog):
         
         # Chest plate confidence
         confidence_layout.addWidget(QLabel("Placa de Peito:"), 1, 0)
-        self.chest_confidence_slider = QSlider(Qt.Horizontal)
+        self.chest_confidence_slider = QSlider(Qt.Orientation.Horizontal)
         self.chest_confidence_slider.setRange(0, 100)
         self.chest_confidence_slider.setValue(50)
         self.chest_confidence_label = QLabel("0.50")
@@ -350,8 +391,11 @@ class ExportDialog(QDialog):
             lambda v: self.chest_confidence_label.setText(f"{v/100:.2f}")
         )
         
-        # Enable export button when output path is selected
+        # Enable export button when output path is selected or export types change
         self.output_path_button.clicked.connect(self._check_export_ready)
+        self.shoes_classification_cb.stateChanged.connect(self._check_export_ready)
+        self.shoes_yolo_cb.stateChanged.connect(self._check_export_ready)
+        self.chest_plate_yolo_cb.stateChanged.connect(self._check_export_ready)
     
     def _select_output_path(self):
         """Select output directory."""
@@ -373,6 +417,14 @@ class ExportDialog(QDialog):
                           self.chest_plate_yolo_cb.isChecked())
         
         self.export_button.setEnabled(has_output_path and has_export_type)
+        
+        # Update UI feedback
+        if not has_output_path:
+            self.export_button.setToolTip("Selecione um diretório de saída primeiro")
+        elif not has_export_type:
+            self.export_button.setToolTip("Selecione pelo menos um tipo de exportação")
+        else:
+            self.export_button.setToolTip("Iniciar exportação")
     
     def _start_export(self):
         """Start the export process."""

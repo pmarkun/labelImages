@@ -4,6 +4,7 @@ Data management and business logic for the Runner Viewer application (new format
 import json
 import shutil
 import copy
+import csv
 from typing import List, Dict, Any, Set
 from .models import DataCache
 
@@ -195,3 +196,53 @@ class DataManager:
             if str(participant.get("bib_number", "")) == bib_number and participant.get("checked", False):
                 return True
         return False
+
+    def export_simplified_csv(self, file_path: str) -> int:
+        """Export a simplified CSV with key runner information."""
+        headers = ["bib", "position", "gender", "run_category", "shoe_brand", "confidence"]
+        exported = 0
+
+        with open(file_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+
+            for participant in self.data:
+                bib = str(participant.get("bib_number", ""))
+                position = participant.get("position", "")
+                gender = participant.get("gender", "")
+                run_category = participant.get("run_category", "")
+                checked = participant.get("checked", False)
+
+                # Gather all shoes from all runners
+                shoes = []
+                for runner in participant.get("runners_found", []):
+                    shoes.extend(runner.get("shoes", []))
+
+                brand_scores: Dict[str, float] = {}
+                for shoe in shoes:
+                    brand = shoe.get("classification_label") or shoe.get("new_label") or shoe.get("label")
+                    if not brand:
+                        continue
+                    conf = shoe.get("confidence", 0)
+                    if isinstance(conf, (int, float)):
+                        brand_scores[brand] = brand_scores.get(brand, 0) + conf
+
+                brand = ""
+                confidence = 0.0
+
+                if checked and brand_scores:
+                    # When checked, assume all shoes labeled consistently
+                    first_shoe = shoes[0] if shoes else {}
+                    brand = first_shoe.get("classification_label") or first_shoe.get("new_label") or first_shoe.get("label") or ""
+                    confidence = 1.0
+                elif brand_scores:
+                    brand = max(brand_scores, key=brand_scores.get)
+                    confidence = brand_scores[brand]
+
+                if not bib and confidence <= 1:
+                    continue
+
+                writer.writerow([bib, position, gender, run_category, brand, f"{confidence:.2f}"])
+                exported += 1
+
+        return exported

@@ -905,8 +905,8 @@ class RunnerViewerApp(QObject):
             base_path = self.config.get("base_path", "")
             self.image_display.display_image(specific_participant, base_path)
             
-            # Update right panel data with the original participant
-            self._update_right_panel_data(participant)
+            # Update right panel data with the specific runner data
+            self._update_right_panel_data(specific_participant)
             
             # Update status bar
             self.update_status_bar()
@@ -1400,93 +1400,6 @@ class RunnerViewerApp(QObject):
                         brands.add(brand)
         
         return sorted(brands), sorted(cats), sorted(genders)
-    
-    def _show_subimage_entry(self, participant_idx: int, tree_item: QTreeWidgetItem) -> None:
-        """Display specific subimage entry when selected in tree."""
-        if not self.data_manager.data or participant_idx >= len(self.data_manager.data):
-            return
-        
-        self.current_index = participant_idx
-        participant = self.data_manager.data[participant_idx]
-        
-        # Get the specific image from the tree item
-        # We need to find which runner this corresponds to
-        parent = tree_item.parent()
-        if not parent:
-            return
-        
-        # Find the runner index based on the tree item's position
-        child_index = parent.indexOfChild(tree_item)
-        runners = participant.get("runners_found", [])
-        
-        if child_index < len(runners):
-            # Create a modified participant with only the specific runner
-            specific_participant = participant.copy()
-            specific_participant["runners_found"] = [runners[child_index]]
-            
-            # Use the image display to show this specific image
-            base_path = self.config.get("base_path", "")
-            self.image_display.display_image(specific_participant, base_path)
-            
-            # Update right panel data with the original participant
-            self._update_right_panel_data(participant)
-            
-            # Update status bar
-            self.update_status_bar()
-        else:
-            # Fallback to normal show_entry
-            self.show_entry(participant_idx)
-    
-    def _remove_current_subimage(self, tree_item: QTreeWidgetItem) -> None:
-        """Remove current subimage (specific runner) from participant."""
-        parent = tree_item.parent()
-        if not parent:
-            return
-        
-        # Get participant index
-        participant_idx = tree_item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
-        if not isinstance(participant_idx, int) or participant_idx >= len(self.data_manager.data):
-            return
-        
-        # Save current state and expansion
-        selected_item_info = self.tree_manager.get_selected_item_info()
-        expansion_state = self.tree_manager.get_expansion_state()
-        
-        self.data_manager.save_state(participant_idx)
-        
-        participant = self.data_manager.data[participant_idx]
-        runners = participant.get("runners_found", [])
-        
-        # Find which runner to remove based on tree position
-        child_index = parent.indexOfChild(tree_item)
-        if child_index < len(runners):
-            # Remove the specific runner
-            runners.pop(child_index)
-            
-            # If no runners left, remove the entire participant
-            if not runners:
-                new_index = self.data_manager.remove_participant(participant_idx)
-                self.current_index = new_index
-            else:
-                # Update the participant with remaining runners
-                participant["runners_found"] = runners
-                self.current_index = participant_idx
-        
-        # Repopulate tree with expansion state restored
-        self.tree_manager.set_data(self.data_manager.data)
-        selected_category = self.main_window.get_category_filter().currentText()
-        selected_gender = self.main_window.get_gender_filter().currentText()
-        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
-        
-        # Select appropriate next item
-        if selected_item_info:
-            self.tree_manager.select_next_item_after_deletion(selected_item_info, expansion_state)
-        else:
-            self.tree_manager.select_next_tree_item()
-        
-        self.mark_unsaved_changes()
-        self.update_status_bar()
 
 def main():
     """Main entry point for the application."""

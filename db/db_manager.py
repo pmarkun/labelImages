@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Dict, Any
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -39,7 +39,7 @@ class DBManager:
             result.append({
                 "id": race.id,
                 "name": race.name,
-                "date": race.date.isoformat() if race.date else "",
+                "date": race.date.isoformat() if race.date is not None else "",
                 "location": race.location,
                 "num_participants": num_participants,
                 "num_images": images,
@@ -48,33 +48,41 @@ class DBManager:
         session.close()
         return result
 
-    def add_race(self, name: str, location: str, date: datetime.date, json_path: str) -> int:
+    def add_race(self, name: str, location: str, date: date, json_path: str) -> int:
         session = self.Session()
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        race = Race(name=name, location=location, date=date)
-        session.add(race)
-        session.flush()
-        for item in data:
-            session.add(Participant(race_id=race.id, data=json.dumps(item)))
-        session.commit()
-        session.close()
-        return race.id
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            race = Race(name=name, location=location, date=date)
+            session.add(race)
+            session.flush()
+            # Access the ID while session is still active
+            race_id = race.id  # type: ignore
+            for item in data:
+                session.add(Participant(race_id=race_id, data=json.dumps(item)))
+            session.commit()
+            return race_id  # type: ignore
+        finally:
+            session.close()
 
     def delete_race(self, race_id: int) -> None:
         session = self.Session()
-        race = session.get(Race, race_id)
-        if race:
-            session.delete(race)
-            session.commit()
-        session.close()
+        try:
+            race = session.get(Race, race_id)
+            if race:
+                session.delete(race)
+                session.commit()
+        finally:
+            session.close()
 
     def load_race_data(self, race_id: int) -> List[Dict[str, Any]]:
         session = self.Session()
-        race = session.get(Race, race_id)
-        data = [json.loads(p.data) for p in race.participants] if race else []
-        session.close()
-        return data
+        try:
+            race = session.get(Race, race_id)
+            data = [json.loads(p.data) for p in race.participants] if race else []
+            return data
+        finally:
+            session.close()
 
     def export_race_to_json(self, race_id: int, path: str) -> None:
         data = self.load_race_data(race_id)

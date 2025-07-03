@@ -1,5 +1,9 @@
 """
-Hybrid image display - combines the best of both performance and quality.
+Hybrid image display - displays images from the enrich_run_data.py format.
+
+Expected data format:
+- Data items are participants with runners_found array
+- Structure: {bib_number, name, position, time, gender, category, run_name, run_category, runners_found: [{image_path, shoes, person_bbox, bib, ...}]}
 """
 import os
 from typing import List, Dict, Any, Optional
@@ -49,17 +53,32 @@ class ImageDisplayManager:
         self.shoe_click_callback = callback
     
     def display_image(self, data_item: Dict[str, Any], base_path: str) -> None:
-        """Display image with hybrid approach."""
+        """Display image from enrich_run_data.py format."""
         if not data_item:
             return
         
-        # Get image path
-        img_filename = data_item.get("filename") or data_item.get("image_path", "")
+        # Get the first runner from runners_found
+        runners_found = data_item.get("runners_found", [])
+        if not runners_found:
+            self._display_no_runners_message()
+            return
+        
+        runner_data = runners_found[0]  # Display first runner
+        
+        # Get image path 
+        img_filename = runner_data.get("image_path", "")
+        
+        # Check if we have a valid filename
+        if not img_filename:
+            self._display_no_image_message()
+            return
+            
         img_path = os.path.join(base_path, img_filename)
         
         # Store current request
         self._current_img_path = img_path
-        self._current_data_item = data_item
+        self._current_data_item = runner_data
+        self._original_data_item = data_item  # Store original for checked status
         
         # Check if container sizes changed (invalidate size-dependent cache)
         current_sizes = self._get_current_sizes()
@@ -68,7 +87,7 @@ class ImageDisplayManager:
             self._last_container_sizes = current_sizes
         
         # Check for cached components
-        cache_key = self._get_smart_cache_key(img_path, data_item, current_sizes)
+        cache_key = self._get_smart_cache_key(img_path, runner_data, current_sizes)
         if cache_key in self._zoom_cache:
             self._cache_hits += 1
             self._apply_cached_components(cache_key, data_item.get('checked', False))
@@ -87,7 +106,7 @@ class ImageDisplayManager:
         if img is not None:
             # Image available immediately
             self._cache_misses += 1
-            self._process_and_display_with_zoom(img, data_item, img_path, current_sizes)
+            self._process_and_display_with_zoom(img, runner_data, img_path, current_sizes)
     
     def _get_current_sizes(self) -> Dict[str, int]:
         """Get current container sizes."""
@@ -99,14 +118,14 @@ class ImageDisplayManager:
             'shoe_container_width': 270
         }
     
-    def _get_smart_cache_key(self, img_path: str, data_item: Dict[str, Any], sizes: Dict[str, int]) -> str:
+    def _get_smart_cache_key(self, img_path: str, runner_data: Dict[str, Any], sizes: Dict[str, int]) -> str:
         """Generate intelligent cache key."""
         # Only include size-affecting elements in cache key
         relevant_data = {
             'path': img_path,
-            'bib': data_item.get('bib', {}),
-            'shoes': data_item.get('shoes', []),
-            'bbox': data_item.get('bbox'),
+            'bib': runner_data.get('bib', {}),
+            'shoes': runner_data.get('shoes', []),
+            'bbox': runner_data.get('person_bbox'),
             'sizes': sizes
         }
         return str(hash(str(relevant_data)))
@@ -143,14 +162,14 @@ class ImageDisplayManager:
         current_sizes = self._get_current_sizes()
         self._process_and_display_with_zoom(img, self._current_data_item, img_path, current_sizes)
     
-    def _process_and_display_with_zoom(self, img: Image.Image, data_item: Dict[str, Any], 
+    def _process_and_display_with_zoom(self, img: Image.Image, runner_data: Dict[str, Any], 
                                      img_path: str, sizes: Dict[str, int]):
         """Process image with proper zoom calculations."""
         try:
-            cache_key = self._get_smart_cache_key(img_path, data_item, sizes)
+            cache_key = self._get_smart_cache_key(img_path, runner_data, sizes)
             
             # Create components with proper zoom
-            components = self._create_components_with_optimal_zoom(img, data_item, sizes)
+            components = self._create_components_with_optimal_zoom(img, runner_data, sizes)
             
             # Cache the results (limit cache size for memory management)
             if len(self._zoom_cache) < 25:
@@ -162,19 +181,20 @@ class ImageDisplayManager:
                     del self._zoom_cache[key]
                 self._zoom_cache[cache_key] = components
             
-            # Apply to UI
-            self._apply_components(components, data_item.get('checked', False))
+            # Apply to UI - get checked status from original data_item if available
+            is_checked = getattr(self, '_original_data_item', {}).get('checked', False)
+            self._apply_components(components, is_checked)
             
         except Exception as e:
             print(f"Error processing {img_path}: {e}")
             self._show_error_state()
     
-    def _create_components_with_optimal_zoom(self, img: Image.Image, data_item: Dict[str, Any], 
+    def _create_components_with_optimal_zoom(self, img: Image.Image, runner_data: Dict[str, Any], 
                                            sizes: Dict[str, int]) -> Dict[str, Any]:
         """Create components with optimal zoom - balance of quality and performance."""
         
         # Use cached bounding box drawing
-        img_with_boxes = draw_bounding_boxes(img, data_item)
+        img_with_boxes = draw_bounding_boxes(img, runner_data)
         
         # Thumbnail - high quality but fixed size
         thumb_target_width = sizes['thumb_width']
@@ -183,10 +203,10 @@ class ImageDisplayManager:
         thumb_pixmap = pil_to_qpixmap(thumb_img)
         
         # Runner - smart zoom with quality
-        runner_pixmap = self._create_runner_with_smart_zoom(img_with_boxes, data_item, sizes)
+        runner_pixmap = self._create_runner_with_smart_zoom(img_with_boxes, runner_data, sizes)
         
         # Shoes - optimal zoom for container
-        shoes_data = self._create_shoes_with_optimal_zoom(img, data_item, sizes)
+        shoes_data = self._create_shoes_with_optimal_zoom(img, runner_data, sizes)
         
         return {
             'thumb_pixmap': thumb_pixmap,
@@ -195,9 +215,9 @@ class ImageDisplayManager:
         }
     
     def _create_runner_with_smart_zoom(self, img_with_boxes: Image.Image, 
-                                     data_item: Dict[str, Any], sizes: Dict[str, int]):
+                                     runner_data: Dict[str, Any], sizes: Dict[str, int]):
         """Create runner with smart zoom calculation."""
-        bbox = data_item.get("bbox") or data_item.get("person_bbox", [0, 0, img_with_boxes.width, img_with_boxes.height])
+        bbox = runner_data.get("person_bbox", [0, 0, img_with_boxes.width, img_with_boxes.height])
         runner_crop = crop_image(img_with_boxes, bbox)
         
         target_width = sizes['runner_width']
@@ -228,11 +248,11 @@ class ImageDisplayManager:
         
         return pil_to_qpixmap(runner_img)
     
-    def _create_shoes_with_optimal_zoom(self, img: Image.Image, data_item: Dict[str, Any], 
+    def _create_shoes_with_optimal_zoom(self, img: Image.Image, runner_data: Dict[str, Any], 
                                       sizes: Dict[str, int]) -> List[Dict[str, Any]]:
         """Create shoes with optimal zoom for container."""
         shoes_data = []
-        shoes = data_item.get("shoes", [])
+        shoes = runner_data.get("shoes", [])
         
         if not shoes:
             return shoes_data
@@ -275,7 +295,10 @@ class ImageDisplayManager:
                         shoe_img = shoe_crop.resize((new_width, new_height), Image.Resampling.LANCZOS)
                         shoe_pixmap = pil_to_qpixmap(shoe_img)
                         
-                        brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
+                        # Get brand with priority: classification_label > new_label > label
+                        brand = (shoe.get("classification_label") or 
+                                shoe.get("new_label") or 
+                                shoe.get("label", ""))
                         
                         shoes_data.append({
                             'pixmap': shoe_pixmap,
@@ -382,13 +405,36 @@ class ImageDisplayManager:
         self.thumb_label.setStyleSheet("border: 2px solid red; background-color: #ffe6e6;")
         self.runner_label.setText("Erro")
     
+    def _display_no_image_message(self):
+        """Display message when no image is available."""
+        self.thumb_label.setText("Sem\nImagem")
+        self.thumb_label.setStyleSheet("border: 2px solid #ccc; background-color: #f5f5f5; color: #666;")
+        self.runner_label.setText("Nenhuma imagem encontrada")
+        self.runner_label.setStyleSheet("border: 2px solid #ccc; background-color: #f5f5f5; color: #666;")
+        
+        # Clear shoes container
+        self._clear_shoes_efficiently()
+    
+    def _display_no_runners_message(self):
+        """Display message when no runners are found."""
+        self.thumb_label.setText("Sem\nCorredores")
+        self.thumb_label.setStyleSheet("border: 2px solid #ccc; background-color: #f5f5f5; color: #666;")
+        self.runner_label.setText("Nenhum corredor encontrado para este participante")
+        self.runner_label.setStyleSheet("border: 2px solid #ccc; background-color: #f5f5f5; color: #666;")
+        
+        # Clear shoes container
+        self._clear_shoes_efficiently()
+    
     def preload_images(self, data_items: List[Dict[str, Any]], base_path: str):
         """Preload images for faster navigation."""
         paths = []
         for item in data_items[:8]:  # Preload 8 images
-            img_filename = item.get("filename") or item.get("image_path", "")
-            if img_filename:
-                paths.append(os.path.join(base_path, img_filename))
+            # Get image paths from runners_found
+            runners_found = item.get("runners_found", [])
+            for runner in runners_found[:2]:  # Max 2 runners per participant
+                img_filename = runner.get("image_path", "")
+                if img_filename:
+                    paths.append(os.path.join(base_path, img_filename))
         
         if paths:
             self._lazy_cache.preload(paths, priority=5)
@@ -415,7 +461,7 @@ class ExportManager:
         self.output_folder = output_folder
     
     def export_shoes_for_bib(self, bib_number: str) -> int:
-        """Export all shoes for images with the same bib number."""
+        """Export all shoes for participants with the same bib number."""
         if not bib_number:
             print("No bib number provided")
             return 0
@@ -423,70 +469,81 @@ class ExportManager:
         exported_count = 0
         
         for idx, item in enumerate(self.data):
-            # Get bib number from this item
-            item_bib_number = ""
-            item_run_data = item.get("run_data", {})
-            if isinstance(item_run_data, dict):
-                item_bib_number = str(item_run_data.get("bib_number", ""))
-            
-            # Skip if not the same bib number
+            # Check bib_number at participant level
+            item_bib_number = item.get("bib_number", "")
             if item_bib_number != bib_number:
                 continue
             
-            # Get the original image path
-            img_filename = item.get("filename") or item.get("image_path", "")
-            if not img_filename:
-                print(f"No image filename found for item {idx}")
-                continue
-            
-            img_path = os.path.join(self.base_path, img_filename)
-            if not os.path.exists(img_path):
-                print(f"Original image not found: {img_path}")
-                continue
-            
-            try:
-                img = Image.open(img_path)
-            except Exception as e:
-                print(f"Error opening image {img_path}: {e}")
-                continue
-            
-            # Process each shoe in this image
-            shoes = item.get("shoes", [])
-            for i, shoe in enumerate(shoes):
-                try:
-                    # Get the brand/label for this shoe
-                    brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "")
-                    if not brand:
-                        print(f"No brand found for shoe {i} in image {idx}")
-                        continue
-                    
-                    # Get the bounding box
-                    shoe_bbox = shoe.get("bbox")
-                    if not shoe_bbox or len(shoe_bbox) < 4:
-                        print(f"No valid bbox found for shoe {i} in image {idx}")
-                        continue
-                    
-                    # Crop the shoe
-                    shoe_crop = crop_image(img, shoe_bbox)
-                    
-                    # Create output directory
-                    brand_dir = os.path.join(self.output_folder, brand)
-                    os.makedirs(brand_dir, exist_ok=True)
-                    
-                    # Generate output filename
-                    base_name = os.path.splitext(os.path.basename(img_filename))[0]
-                    shoe_filename = f"crop_{base_name}_img{idx}_shoe_{i}.jpg"
-                    output_path = os.path.join(brand_dir, shoe_filename)
-                    
-                    # Save the cropped shoe
-                    shoe_crop.save(output_path, "JPEG", quality=95)
-                    print(f"Exported shoe crop: {output_path}")
-                    exported_count += 1
-                    
-                except Exception as e:
-                    print(f"Error exporting shoe {i} from image {idx}: {e}")
+            # Process all runners for this participant
+            runners = item.get("runners_found", [])
+            for runner_idx, runner in enumerate(runners):
+                exported_count += self._export_runner_shoes(
+                    runner, idx, runner_idx, item_bib_number
+                )
         
         print(f"Exported {exported_count} shoe crops for bib number {bib_number}")
+        return exported_count
+    
+    def _export_runner_shoes(self, runner_data: Dict[str, Any], item_idx: int, 
+                           runner_idx: int, bib_number: str) -> int:
+        """Export shoes from a single runner."""
+        exported_count = 0
+        
+        # Get the original image path
+        img_filename = runner_data.get("image_path", "")
+        if not img_filename:
+            print(f"No image filename found for item {item_idx}, runner {runner_idx}")
+            return 0
+        
+        img_path = os.path.join(self.base_path, img_filename)
+        if not os.path.exists(img_path):
+            print(f"Original image not found: {img_path}")
+            return 0
+        
+        try:
+            img = Image.open(img_path)
+        except Exception as e:
+            print(f"Error opening image {img_path}: {e}")
+            return 0
+        
+        # Process each shoe in this runner
+        shoes = runner_data.get("shoes", [])
+        for i, shoe in enumerate(shoes):
+            try:
+                # Get the brand/label for this shoe
+                brand = (shoe.get("classification_label") or 
+                        shoe.get("new_label") or 
+                        shoe.get("label", ""))
+                if not brand:
+                    print(f"No brand found for shoe {i} in item {item_idx}, runner {runner_idx}")
+                    continue
+                
+                # Get the bounding box
+                shoe_bbox = shoe.get("bbox")
+                if not shoe_bbox or len(shoe_bbox) < 4:
+                    print(f"No valid bbox found for shoe {i} in item {item_idx}, runner {runner_idx}")
+                    continue
+                
+                # Crop the shoe
+                shoe_crop = crop_image(img, shoe_bbox)
+                
+                # Create output directory
+                brand_dir = os.path.join(self.output_folder, brand)
+                os.makedirs(brand_dir, exist_ok=True)
+                
+                # Generate output filename
+                base_name = os.path.splitext(os.path.basename(img_filename))[0]
+                shoe_filename = f"crop_{base_name}_item{item_idx}_runner{runner_idx}_shoe_{i}.jpg"
+                output_path = os.path.join(brand_dir, shoe_filename)
+                
+                # Save the cropped shoe
+                shoe_crop.save(output_path, "JPEG", quality=95)
+                print(f"Exported shoe crop: {output_path}")
+                exported_count += 1
+                
+            except Exception as e:
+                print(f"Error exporting shoe {i} from item {item_idx}, runner {runner_idx}: {e}")
+        
         return exported_count
     
     def on_shoe_click(self, event, shoe_index: int, current_item: Dict[str, Any], 
@@ -496,12 +553,20 @@ class ExportManager:
         if not current_item:
             return
         
-        shoes = current_item.get("shoes", [])
+        # Get the first runner from runners_found
+        runners_found = current_item.get("runners_found", [])
+        if not runners_found:
+            return
+        
+        runner_data = runners_found[0]
+        shoes = runner_data.get("shoes", [])
         if shoe_index >= len(shoes):
             return
         
         shoe = shoes[shoe_index]
-        brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label", "Unknown")
+        brand = (shoe.get("classification_label") or 
+                shoe.get("new_label") or 
+                shoe.get("label", "Unknown"))
         
         # Show confirmation dialog
         reply = QMessageBox.question(
@@ -518,7 +583,7 @@ class ExportManager:
             
             # Remove the shoe from the data
             shoes.pop(shoe_index)
-            current_item["shoes"] = shoes
+            runner_data["shoes"] = shoes
             
             # Mark as having unsaved changes
             mark_unsaved_callback()

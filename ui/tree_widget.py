@@ -51,40 +51,59 @@ class TreeManager(QObject):
                 continue
             
             # Apply filter: skip this bib if it has checked images and we're filtering for unchecked only
-            if filter_unchecked_only and bib_number != "?" and self._bib_has_checked_images(str(bib_number)):
+            if filter_unchecked_only and bib_number != "?" and self._bib_has_checked(str(bib_number)):
                 continue
             
             relevant_bibs.append(cache_data)
         
-        # Sort by position (numeric value of bib number) using the 'position' field
-        relevant_bibs.sort(key=lambda x: get_position_from_bib(x['position']))
+        # Sort by position (numeric value of 'position' field, fallback to 999999 for '?')
+        def get_participant_position(x):
+            pos = x.get('position', '?')
+            try:
+                return int(pos)
+            except Exception:
+                return 999999  # '?' or invalid goes to the end
+        relevant_bibs.sort(key=get_participant_position)
         
         # Create tree nodes
         for cache_data in relevant_bibs:
             bib_number = cache_data['bib_number']
-            position = get_position_from_bib(cache_data['position'])
+            pos_raw = cache_data.get('position', '?')
+            try:
+                position = int(pos_raw)
+            except Exception:
+                position = '?'
             gender = cache_data["gender"]
+            category = cache_data["category"]
+            has_valid_image = cache_data.get('has_valid_image', True)
             
             # Create the bib node with format [Position]. [Gender] ([Bib Number])
-            if position == 999999:
-                bib_text = f"?. {gender} ({bib_number})"
-            else:
-                bib_text = f"{position}. {gender} ({bib_number})"
+            bib_text = f"{position}. {category} {gender} ({bib_number})"
+            
+            # Add indication if no images
+            if not has_valid_image:
+                bib_text += " [Sem imagens]"
             
             bib_node = QTreeWidgetItem(self.tree, [bib_text])
             
             # Store the best image index as the bib node's data
-            bib_node.setData(0, Qt.UserRole, cache_data['index'])
+            bib_node.setData(0, Qt.UserRole, cache_data['index'])  # type: ignore[attr-defined]
             
             # Mark that this node needs to load children when expanded
-            bib_node.setData(1, Qt.UserRole, {
+            bib_node.setData(1, Qt.UserRole, {  # type: ignore[attr-defined]
                 'bib_number': bib_number, 
                 'category': selected_category, 
-                'loaded': False
+                'loaded': False,
+                'has_valid_image': has_valid_image
             })
             
-            # Add a dummy child so the expansion triangle appears
-            dummy_child = QTreeWidgetItem(bib_node, ["Carregando..."])
+            # Only add dummy child if there are valid images
+            if has_valid_image:
+                # Add a dummy child so the expansion triangle appears
+                dummy_child = QTreeWidgetItem(bib_node, ["Carregando..."])
+            else:
+                # Disable expansion for items without images
+                bib_node.setFlags(bib_node.flags() & ~Qt.ItemIsSelectable)  # type: ignore[attr-defined]
         
         # Connect the tree expansion signal to load children on demand
         if not self._expansion_connected:
@@ -100,8 +119,19 @@ class TreeManager(QObject):
     def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
         """Load children when a bib node is expanded."""
         # Check if this item needs to load children
-        item_data = item.data(1, Qt.UserRole)
+        item_data = item.data(1, Qt.UserRole)  # type: ignore[attr-defined]
         if not isinstance(item_data, dict) or item_data.get('loaded', True):
+            return
+        
+        # Check if this item has valid images
+        has_valid_image = item_data.get('has_valid_image', True)
+        if not has_valid_image:
+            # Remove dummy child and add message
+            item.takeChildren()
+            no_image_child = QTreeWidgetItem(item, ["Nenhuma imagem encontrada"])
+            no_image_child.setFlags(no_image_child.flags() & ~Qt.ItemIsSelectable)  # type: ignore[attr-defined]
+            item_data['loaded'] = True
+            item.setData(1, Qt.UserRole, item_data)  # type: ignore[attr-defined]
             return
         
         bib_number = item_data.get('bib_number')
@@ -113,21 +143,13 @@ class TreeManager(QObject):
         # Remove the dummy child
         item.takeChildren()
         
-        # Find all images for this bib number
-        images_for_bib = []
-        for idx, data_item in enumerate(self.data):
-            # Get bib number from run_data
-            item_bib_number = ""
-            run_data = data_item.get("run_data", {})
-            if isinstance(run_data, dict):
-                item_bib_number = str(run_data.get("bib_number", ""))
-            
-            # Get category
-            item_category = ""
-            if isinstance(run_data, dict):
-                item_category = run_data.get("run_category", "")
-                if item_category == "Not Identifiable":
-                    item_category = "?"
+        # Find all participants for this bib number
+        participants_for_bib = []
+        for idx, participant in enumerate(self.data):
+            item_bib_number = str(participant.get("bib_number", ""))
+            item_category = participant.get("run_category", "")
+            if item_category == "Not Identifiable":
+                item_category = "?"
             
             # Skip if doesn't match bib number or category filter
             if item_bib_number != bib_number:
@@ -135,28 +157,31 @@ class TreeManager(QObject):
             if category and category != "?" and item_category != category:
                 continue
             
-            images_for_bib.append((idx, data_item))
+            # Check if this participant has at least one runner with images
+            runners = participant.get("runners_found", [])
+            for runner_idx, runner in enumerate(runners):
+                img_path = runner.get("image") or runner.get("image_path")
+                if img_path:
+                    participants_for_bib.append((idx, participant, runner_idx, img_path, runner))
         
-        # Add child nodes for each image
-        for idx, data_item in images_for_bib:
-            is_checked = data_item.get("checked", False)
-            
-            # Support both old and new format for filename
-            img_name = data_item.get("filename") or data_item.get("image_path", str(idx))
-            if img_name != str(idx):
-                # Extract just the filename part if it's a path
+        # Add child nodes for each runner image
+        if participants_for_bib:
+            for idx, participant, runner_idx, img_path, runner in participants_for_bib:
+                is_checked = participant.get("checked", False)
                 import os
-                img_name = os.path.basename(img_name)
-            
-            if is_checked:
-                img_name = "✓ " + img_name
-            
-            img_node = QTreeWidgetItem(item, [img_name])
-            img_node.setData(0, Qt.UserRole, idx)
+                img_name = os.path.basename(img_path)
+                if is_checked:
+                    img_name = "✓ " + img_name
+                img_node = QTreeWidgetItem(item, [img_name])
+                img_node.setData(0, Qt.UserRole, idx)  # type: ignore[attr-defined]
+        else:
+            # No valid images found
+            no_image_child = QTreeWidgetItem(item, ["Nenhuma imagem válida encontrada"])
+            no_image_child.setFlags(no_image_child.flags() & ~Qt.ItemIsSelectable)  # type: ignore[attr-defined]
         
         # Mark as loaded
         item_data['loaded'] = True
-        item.setData(1, Qt.UserRole, item_data)
+        item.setData(1, Qt.UserRole, item_data)  # type: ignore[attr-defined]
         
         # Emit signal for external handling
         self.item_expanded.emit(item)
@@ -169,7 +194,7 @@ class TreeManager(QObject):
         def find_item_with_index(item: QTreeWidgetItem, target_index: int) -> Optional[QTreeWidgetItem]:
             """Recursively search for tree item with specific data index."""
             # Check if this item has the target index
-            item_index = item.data(0, Qt.UserRole)
+            item_index = item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
             if item_index == target_index:
                 return item
             
@@ -187,7 +212,7 @@ class TreeManager(QObject):
             bib_item = self.tree.topLevelItem(i)
             if bib_item:
                 # Check if this bib node itself has the target index (best image)
-                if bib_item.data(0, Qt.UserRole) == data_index:
+                if bib_item.data(0, Qt.UserRole) == data_index:  # type: ignore[attr-defined]
                     self.tree.setCurrentItem(bib_item)
                     return
                 
@@ -246,14 +271,11 @@ class TreeManager(QObject):
                 if last_item:
                     self.tree.setCurrentItem(last_item)
     
-    def _bib_has_checked_images(self, bib_number: str) -> bool:
-        """Check if a bib number has any checked images."""
-        for item in self.data:
-            run_data = item.get("run_data", {})
-            if isinstance(run_data, dict):
-                item_bib_number = str(run_data.get("bib_number", ""))
-                if item_bib_number == bib_number and item.get("checked", False):
-                    return True
+    def _bib_has_checked(self, bib_number: str) -> bool:
+        """Check if a bib number has any checked participants."""
+        for participant in self.data:
+            if str(participant.get("bib_number", "")) == bib_number and participant.get("checked", False):
+                return True
         return False
     
     def get_expansion_state(self) -> Dict[str, bool]:
@@ -288,13 +310,13 @@ class TreeManager(QObject):
                 'type': 'image',
                 'bib_text': parent.text(0),
                 'image_name': current_item.text(0),
-                'data_index': current_item.data(0, Qt.UserRole)
+                'data_index': current_item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
             }
         else:
             return {
                 'type': 'bib',
                 'bib_text': current_item.text(0),
-                'data_index': current_item.data(0, Qt.UserRole)
+                'data_index': current_item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
             }
     
     def select_next_item_after_deletion(self, deleted_item_info: Dict[str, Any], expansion_state: Dict[str, bool]) -> None:

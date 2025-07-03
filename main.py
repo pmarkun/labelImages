@@ -212,10 +212,9 @@ class RunnerViewerApp(QObject):
         dialog.exec_()
 
     def collect_stats(self) -> None:
-        """Collect brands and categories from data."""
+        """Collect brands and categories from data (new format)."""
         config_labels = self.config.get("labels", [])
-        self.brands, self.bib_categories, self.genders = self.data_manager.collect_stats(config_labels)
-        
+        self.brands, self.bib_categories, self.genders = self._collect_stats_new_format(config_labels)
         # Update UI components
         self._update_category_filter()
         self._update_gender_filter()
@@ -234,7 +233,7 @@ class RunnerViewerApp(QObject):
         """Update the gender filter dropdown."""
         category_filter = self.main_window.get_gender_filter()
         category_filter.clear()
-        category_filter.addItem("Todas os gêneros")
+        category_filter.addItem("Todos os gêneros")
         category_filter.addItems(self.genders)
     
     def _update_bib_category_combo(self) -> None:
@@ -305,20 +304,16 @@ class RunnerViewerApp(QObject):
         """Update the right panel with current data."""
         is_checked = data_item.get('checked', False)
         
-        # Get bib number and category
-        run_data = data_item.get("run_data", {})
-        bib_number = ""
-        category = ""
-        if isinstance(run_data, dict):
-            bib_number = str(run_data.get("bib_number", ""))
-            category = run_data.get("run_category", "")
+        # Get bib number and category from participant data (new format)
+        bib_number = data_item.get("bib_number", "")
+        category = data_item.get("run_category", "")
         
         # Temporarily disconnect signals
         self._disconnect_right_panel_signals()
         
         # Update fields
         bib_number_field = self.main_window.get_bib_number_field()
-        bib_number_field.setText(bib_number)
+        bib_number_field.setText(str(bib_number))
         bib_number_field.setEnabled(not is_checked)
         
         bib_category_field = self.main_window.get_bib_category_field()
@@ -334,12 +329,15 @@ class RunnerViewerApp(QObject):
             chk.setChecked(False)
             chk.setEnabled(not is_checked)
         
-        # Get current shoe brands
+        # Get current shoe brands from first runner (if any)
         brands_present = set()
-        for shoe in data_item.get("shoes", []):
-            brand = shoe.get("new_label") or shoe.get("label") or shoe.get("classification_label")
-            if brand:
-                brands_present.add(brand)
+        runners_found = data_item.get("runners_found", [])
+        if runners_found:
+            first_runner = runners_found[0]
+            for shoe in first_runner.get("shoes", []):
+                brand = shoe.get("classification_label") or shoe.get("new_label") or shoe.get("label")
+                if brand:
+                    brands_present.add(brand)
         
         for chk in brand_checks:
             if chk.text() in brands_present:
@@ -412,7 +410,7 @@ class RunnerViewerApp(QObject):
         """Handle tree item selection."""
         if current is None:
             return
-        idx = current.data(0, Qt.UserRole)
+        idx = current.data(0, Qt.UserRole)  # type: ignore[attr-defined]
         if isinstance(idx, int):
             self.show_entry(idx)
     
@@ -432,10 +430,9 @@ class RunnerViewerApp(QObject):
         # Save state for undo
         self.data_manager.save_state(self.current_index)
         
-        # Update data
+        # Update data (new format: bib_number at participant level)
         item = self.data_manager.data[self.current_index]
-        run_data = item.setdefault("run_data", {})
-        run_data["bib_number"] = bib_text
+        item["bib_number"] = bib_text
         
         self.mark_unsaved_changes()
         
@@ -466,10 +463,9 @@ class RunnerViewerApp(QObject):
         # Save state for undo
         self.data_manager.save_state(self.current_index)
         
-        # Update data
+        # Update data (new format: run_category at participant level)
         item = self.data_manager.data[self.current_index]
-        run_data = item.setdefault("run_data", {})
-        run_data["run_category"] = category_text
+        item["run_category"] = category_text
         
         self.mark_unsaved_changes()
         
@@ -499,8 +495,8 @@ class RunnerViewerApp(QObject):
         # Save state for undo
         self.data_manager.save_state(self.current_index)
         
-        # Update data
-        self.data_manager.update_image_data(
+        # Update data for new format
+        self._update_participant_data(
             self.current_index, 
             self.main_window.get_bib_number_field().text(),
             self.main_window.get_bib_category_field().currentText(),
@@ -509,6 +505,49 @@ class RunnerViewerApp(QObject):
         
         self.mark_unsaved_changes()
         self.show_entry(self.current_index)  # Refresh display
+    
+    def _update_participant_data(self, index: int, bib_number: str, category: str, 
+                               checked_brands: List[str]) -> None:
+        """Update participant data with new information (new format)."""
+        if not (0 <= index < len(self.data_manager.data)):
+            return
+        
+        item = self.data_manager.data[index]
+        
+        # Update participant level data
+        item["bib_number"] = bib_number
+        if category:
+            item["run_category"] = category
+        
+        # Update shoe brands in first runner (if any)
+        runners_found = item.get("runners_found", [])
+        if runners_found:
+            first_runner = runners_found[0]
+            shoes = first_runner.get("shoes", [])
+            
+            # Clear existing brands
+            for shoe in shoes:
+                if "classification_label" in shoe:
+                    shoe["classification_label"] = ""
+                elif "new_label" in shoe:
+                    shoe["new_label"] = ""
+                elif "label" in shoe:
+                    shoe["label"] = ""
+            
+            # Apply new brands
+            if checked_brands and shoes:
+                for idx, shoe in enumerate(shoes):
+                    if len(checked_brands) == 1:
+                        brand = checked_brands[0]
+                    else:
+                        brand = checked_brands[idx % len(checked_brands)]
+                    
+                    if "classification_label" in shoe:
+                        shoe["classification_label"] = brand
+                    elif "new_label" in shoe:
+                        shoe["new_label"] = brand
+                    else:
+                        shoe["new_label"] = brand
     
     def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
         """Handle tree item expansion."""
@@ -556,10 +595,10 @@ class RunnerViewerApp(QObject):
         return self.data_manager.data[self.current_index].get('checked', False)
     
     # Keyboard handling
-    def eventFilter(self, source, event):
+    def eventFilter(self, obj, event):
         """Handle keyboard events."""
         tree = self.main_window.get_tree_widget()
-        if source == tree and event.type() == QEvent.KeyPress:
+        if obj == tree and event.type() == QEvent.KeyPress:  # type: ignore[attr-defined]
             key = event.key()
             modifiers = event.modifiers()
             key_text = event.text().lower()
@@ -573,15 +612,15 @@ class RunnerViewerApp(QObject):
             # Custom shortcuts
             if key == Qt.Key_C or key == Qt.Key_K or key == Qt.Key_Delete or \
                (modifiers == Qt.ControlModifier and key == Qt.Key_Z) or \
-               key == Qt.Key_Return or key == Qt.Key_Enter:
+               key == Qt.Key_Return or key == Qt.Key_Enter:  # type: ignore[attr-defined]
                 self.keyPressEvent(event)
                 return True
             
             # Allow arrow key navigation
-            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):  # type: ignore[attr-defined]
                 return False
         
-        return super().eventFilter(source, event)
+        return super().eventFilter(obj, event)
     
     def keyPressEvent(self, event: QKeyEvent):
         """Handle key press events."""
@@ -589,7 +628,7 @@ class RunnerViewerApp(QObject):
             return
         
         # Ctrl+Z for undo
-        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Z:
+        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Z:  # type: ignore[attr-defined]
             self._undo()
             return
         
@@ -606,14 +645,14 @@ class RunnerViewerApp(QObject):
         is_checked = self._is_current_checked()
         
         # Delete key
-        if event.key() == Qt.Key_Delete:
+        if event.key() == Qt.Key_Delete:  # type: ignore[attr-defined]
             if is_checked:
                 self.main_window.show_protected_image_message()
                 return
             
             current_tree_item = self.main_window.get_tree_widget().currentItem()
             if current_tree_item:
-                if current_tree_item.childCount() > 0 and current_tree_item.data(0, Qt.UserRole) is None:
+                if current_tree_item.childCount() > 0 and current_tree_item.data(0, Qt.UserRole) is None:  # type: ignore[attr-defined]
                     # Remove all images with this bib number
                     bib_number = current_tree_item.text(0)
                     self._remove_all_images_with_bib(bib_number)
@@ -625,7 +664,7 @@ class RunnerViewerApp(QObject):
             return
         
         # K key - propagate data
-        if event.key() == Qt.Key_K:
+        if event.key() == Qt.Key_K:  # type: ignore[attr-defined]
             if is_checked:
                 self.main_window.show_protected_image_message()
                 return
@@ -633,20 +672,20 @@ class RunnerViewerApp(QObject):
             return
         
         # C key - toggle checked
-        if event.key() == Qt.Key_C:
+        if event.key() == Qt.Key_C:  # type: ignore[attr-defined]
             self._toggle_checked()
             return
         
         # Navigation
-        if event.key() == Qt.Key_Right or event.key() == Qt.Key_Down:
+        if event.key() == Qt.Key_Right or event.key() == Qt.Key_Down:  # type: ignore[attr-defined]
             self.current_index = min(self.current_index + 1, len(self.data_manager.data) - 1)
             self.show_entry(self.current_index)
             return
-        if event.key() == Qt.Key_Left or event.key() == Qt.Key_Up:
+        if event.key() == Qt.Key_Left or event.key() == Qt.Key_Up:  # type: ignore[attr-defined]
             self.current_index = max(self.current_index - 1, 0)
             self.show_entry(self.current_index)
             return
-        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:  # type: ignore[attr-defined]
             if not is_checked:
                 self._apply_changes()
             else:
@@ -680,7 +719,7 @@ class RunnerViewerApp(QObject):
         expansion_state = self.tree_manager.get_expansion_state()
         
         self.data_manager.save_state(self.current_index)
-        new_index = self.data_manager.remove_image(self.current_index)
+        new_index = self.data_manager.remove_participant(self.current_index)
         self.current_index = new_index
         
         # Repopulate tree with expansion state restored
@@ -706,7 +745,7 @@ class RunnerViewerApp(QObject):
         expansion_state = self.tree_manager.get_expansion_state()
         
         self.data_manager.save_state(self.current_index)
-        new_index = self.data_manager.remove_all_images_with_bib(bib_number)
+        new_index = self.data_manager.remove_all_with_bib(bib_number)
         self.current_index = new_index
         
         # Repopulate tree with expansion state restored
@@ -774,7 +813,7 @@ class RunnerViewerApp(QObject):
         ]
         
         self.data_manager.save_state(self.current_index)
-        self.data_manager.update_image_data(self.current_index, bib_number, category, checked_brands)
+        self.data_manager.update_participant_data(self.current_index, bib_number, category, checked_brands)
         
         self.mark_unsaved_changes()
         self.update_status_bar()
@@ -820,7 +859,7 @@ class RunnerViewerApp(QObject):
         checked_brands = [target_brand]  # Only the shortcut brand is selected
         
         self.data_manager.save_state(self.current_index)
-        self.data_manager.update_image_data(self.current_index, bib_number, category, checked_brands)
+        self.data_manager.update_participant_data(self.current_index, bib_number, category, checked_brands)
         
         self.mark_unsaved_changes()
         self.update_status_bar()
@@ -862,19 +901,47 @@ class RunnerViewerApp(QObject):
                 event.ignore()
         else:
             event.accept()
-
-
-def main():
-    """Main entry point."""
-    app = QApplication(sys.argv)
-    viewer = RunnerViewerApp()
-    viewer.show()
     
-    # Handle close event
-    app.lastWindowClosed.connect(app.quit)
-    
-    sys.exit(app.exec_())
+    def _collect_stats_new_format(self, config_labels: List[Dict[str, Any]]) -> tuple:
+        """Collect brands, categories and genders from data (new format)."""
+        brands = set()
+        cats = set()
+        genders = set()
+        
+        # Add brands from config
+        for label_config in config_labels:
+            if isinstance(label_config, dict) and "label" in label_config:
+                brands.add(label_config["label"])
+        
+        # Add brands, categories and genders from data
+        for item in self.data_manager.data:
+            # Get category and gender from participant level
+            category = item.get("run_category", "")
+            if category and category != "Not Identifiable":
+                cats.add(category)
+            
+            gender = item.get("gender", "")
+            if gender:
+                genders.add(gender)
+            
+            # Get brands from runners_found
+            runners_found = item.get("runners_found", [])
+            for runner in runners_found:
+                for shoe in runner.get("shoes", []):
+                    brand = (shoe.get("classification_label") or 
+                            shoe.get("new_label") or 
+                            shoe.get("label"))
+                    if brand:
+                        brands.add(brand)
+        
+        return sorted(brands), sorted(cats), sorted(genders)
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    from PyQt5.QtWidgets import QApplication
+    print("Starting Runner Viewer...")
+    app = QApplication(sys.argv)
+    viewer = RunnerViewerApp()
+    viewer.show()
+    sys.exit(app.exec_())

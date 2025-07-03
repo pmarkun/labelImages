@@ -81,8 +81,14 @@ class TreeManager(QObject):
             if not has_valid_image:
                 continue
             
+            # Check if this bib has any checked participants
+            has_checked = self._bib_has_checked(str(bib_number))
+            
             # Create the bib node with format [Position]. [Gender] ([Bib Number])
+            # Add a checkmark flag if any participant is checked
             bib_text = f"{position}. {category} {gender} ({bib_number})"
+            if has_checked:
+                bib_text = "✓ " + bib_text
             
             bib_node = QTreeWidgetItem(self.tree, [bib_text])
             

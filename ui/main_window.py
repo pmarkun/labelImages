@@ -25,7 +25,7 @@ class RunnerViewerMainWindow(QMainWindow):
     base_path_change_requested = pyqtSignal()
     configuration_requested = pyqtSignal()
     export_requested = pyqtSignal()
-    export_json_requested = pyqtSignal()
+    export_csv_requested = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -149,8 +149,8 @@ class RunnerViewerMainWindow(QMainWindow):
         set_base = QAction("📁 Definir Base Path", self)
         set_base.triggered.connect(lambda: self.base_path_change_requested.emit())
 
-        export_json = QAction("📝 Exportar JSON", self)
-        export_json.triggered.connect(lambda: self.export_json_requested.emit())
+        export_csv = QAction("📝 Exportar CSV", self)
+        export_csv.triggered.connect(lambda: self.export_csv_requested.emit())
 
         file_menu = self.menuBar().addMenu("Arquivo")
         if file_menu:
@@ -160,7 +160,7 @@ class RunnerViewerMainWindow(QMainWindow):
             file_menu.addAction(save_as_json)
             file_menu.addSeparator()
             file_menu.addAction(set_base)
-            file_menu.addAction(export_json)
+            file_menu.addAction(export_csv)
         
         # Tools menu
         config_action = QAction("⚙️ Configurações", self)

@@ -223,7 +223,7 @@ class DataManager:
                     brand = shoe.get("classification_label") or shoe.get("new_label") or shoe.get("label")
                     if not brand:
                         continue
-                    conf = shoe.get("confidence", 0)
+                    conf = shoe.get("classification_confidence", 0)
                     if isinstance(conf, (int, float)):
                         brand_scores[brand] = brand_scores.get(brand, 0) + conf
 
@@ -239,10 +239,8 @@ class DataManager:
                     brand = max(brand_scores, key=brand_scores.get)
                     confidence = brand_scores[brand]
 
-                if not bib and confidence <= 1:
-                    continue
-
-                writer.writerow([bib, position, gender, run_category, brand, f"{confidence:.2f}"])
-                exported += 1
+                if confidence >= 0.95:
+                    writer.writerow([bib, position, gender, run_category, brand, f"{confidence:.2f}"])
+                    exported += 1
 
         return exported

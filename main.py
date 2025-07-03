@@ -82,7 +82,7 @@ class RunnerViewerApp(QObject):
         self.main_window.json_save_as_requested.connect(self.save_as_json)
         self.main_window.base_path_change_requested.connect(self.select_base_path)
         self.main_window.export_requested.connect(self.open_export_dialog)
-        self.main_window.export_json_requested.connect(self.export_json)
+        self.main_window.export_csv_requested.connect(self.export_csv)
         
         # Left panel signals
         self.main_window.left_panel.filter_changed.connect(self.on_filter_changed)
@@ -211,7 +211,7 @@ class RunnerViewerApp(QObject):
         # Show the dialog
         dialog.exec_()
 
-    def export_json(self) -> None:
+    def export_csv(self) -> None:
         """Export current data to a JSON file and a simplified CSV."""
         if not self.data_manager.data:
             QMessageBox.information(
@@ -223,28 +223,22 @@ class RunnerViewerApp(QObject):
 
         from PyQt5.QtWidgets import QFileDialog
 
-        json_path, _ = QFileDialog.getSaveFileName(
+        csv_path, _ = QFileDialog.getSaveFileName(
             self.main_window,
-            "Exportar JSON",
-            filter="JSON Files (*.json)"
+            "Exportar CSV",
+            filter="CSV Files (*.csv)"
         )
 
-        if not json_path:
+        if not csv_path:
             return
 
         try:
-            # Save full JSON
-            self.data_manager.save_json(json_path, backup=False)
-
-            # Export simplified CSV
-            base, _ = os.path.splitext(json_path)
-            csv_path = base + "_export.csv"
             exported = self.data_manager.export_simplified_csv(csv_path)
 
             QMessageBox.information(
                 self.main_window,
                 "Exportação Concluída",
-                f"JSON salvo em {json_path}\nCSV salvo em {csv_path}\n{exported} linhas exportadas."
+                f"CSV salvo em {csv_path}\n{exported} linhas exportadas."
             )
         except Exception as e:
             QMessageBox.critical(self.main_window, "Erro", f"Falha ao exportar: {e}")

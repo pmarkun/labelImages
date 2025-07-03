@@ -96,7 +96,6 @@ class DataManager:
         """Remove participant at index and return new current index."""
         if 0 <= index < len(self.data):
             self.data.pop(index)
-            self.cache.build_cache(self.data)
             if index > 0:
                 return index - 1
             elif len(self.data) > 0:
@@ -116,7 +115,6 @@ class DataManager:
             self.data.pop(i)
             if i <= new_index:
                 new_index = max(0, new_index - 1)
-        self.cache.build_cache(self.data)
         return min(new_index, len(self.data) - 1) if self.data else -1
     
     def update_participant_data(self, index: int, bib_number: str, category: str, checked_brands: List[str]) -> None:
@@ -146,7 +144,7 @@ class DataManager:
                         shoe["new_label"] = brand
                     else:
                         shoe["new_label"] = brand
-        self.cache.build_cache(self.data)
+        # Cache rebuild removed for speed; will rebuild when collecting stats
     
     def propagate_data_to_same_bib(self, current_index: int) -> None:
         """Propagate current participant data to all with same bib number (new format only)."""
@@ -185,7 +183,7 @@ class DataManager:
                             for key in ("classification_label", "new_label", "label"):
                                 if key in shoe:
                                     shoe[key] = ""
-        self.cache.build_cache(self.data)
+        # Cache rebuild removed for speed; will rebuild when collecting stats
     
     def toggle_checked(self, index: int) -> bool:
         """Toggle checked status of participant and return new status."""

@@ -410,9 +410,17 @@ class RunnerViewerApp(QObject):
         """Handle tree item selection."""
         if current is None:
             return
+        
         idx = current.data(0, Qt.UserRole)  # type: ignore[attr-defined]
         if isinstance(idx, int):
-            self.show_entry(idx)
+            # Check if this is a child item (subimage)
+            parent = current.parent()
+            if parent:
+                # This is a subimage - we need to find the specific runner data
+                self._show_subimage_entry(idx, current)
+            else:
+                # This is a main bib node - show the best image
+                self.show_entry(idx)
     
     def on_bib_number_enter(self) -> None:
         """Handle Enter key in bib number field."""
@@ -935,13 +943,53 @@ class RunnerViewerApp(QObject):
                         brands.add(brand)
         
         return sorted(brands), sorted(cats), sorted(genders)
+    
+    def _show_subimage_entry(self, participant_idx: int, tree_item: QTreeWidgetItem) -> None:
+        """Display specific subimage entry when selected in tree."""
+        if not self.data_manager.data or participant_idx >= len(self.data_manager.data):
+            return
+        
+        self.current_index = participant_idx
+        participant = self.data_manager.data[participant_idx]
+        
+        # Get the specific image from the tree item
+        # We need to find which runner this corresponds to
+        parent = tree_item.parent()
+        if not parent:
+            return
+        
+        # Find the runner index based on the tree item's position
+        child_index = parent.indexOfChild(tree_item)
+        runners = participant.get("runners_found", [])
+        
+        if child_index < len(runners):
+            # Create a modified participant with only the specific runner
+            specific_participant = participant.copy()
+            specific_participant["runners_found"] = [runners[child_index]]
+            
+            # Use the image display to show this specific image
+            base_path = self.config.get("base_path", "")
+            self.image_display.display_image(specific_participant, base_path)
+            
+            # Update right panel data with the original participant
+            self._update_right_panel_data(participant)
+            
+            # Update status bar
+            self.update_status_bar()
+        else:
+            # Fallback to normal show_entry
+            self.show_entry(participant_idx)
+def main():
+    """Main entry point for the application."""
+    app = QApplication(sys.argv)
+    
+    # Create and show the application
+    viewer = RunnerViewerApp()
+    viewer.show()
+    
+    # Start the event loop
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
-    import sys
-    from PyQt5.QtWidgets import QApplication
-    print("Starting Runner Viewer...")
-    app = QApplication(sys.argv)
-    viewer = RunnerViewerApp()
-    viewer.show()
-    sys.exit(app.exec_())
+    main()

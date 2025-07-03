@@ -567,334 +567,98 @@ class RunnerViewerApp(QObject):
         if not self.data_manager.data or self.current_index >= len(self.data_manager.data):
             return
         
-        current_item = self.data_manager.data[self.current_index]
+        # Check if we're viewing a specific subimage
+        current_tree_item = self.main_window.get_tree_widget().currentItem()
+        if current_tree_item and current_tree_item.parent():
+            # We're viewing a specific subimage - remove shoe from that specific runner
+            self._remove_shoe_from_subimage(shoe_index, current_tree_item)
+        else:
+            # We're viewing the main image - use the original behavior
+            current_item = self.data_manager.data[self.current_index]
+            
+            def save_state():
+                self.data_manager.save_state(self.current_index)
+            
+            def mark_unsaved():
+                self.mark_unsaved_changes()
+            
+            def refresh_display():
+                # Save expansion state before refreshing
+                expansion_state = self.tree_manager.get_expansion_state()
+                
+                self.show_entry(self.current_index)
+                
+                # Repopulate tree with expansion state preserved
+                self.tree_manager.set_data(self.data_manager.data)
+                selected_category = self.main_window.get_category_filter().currentText()
+                selected_gender = self.main_window.get_gender_filter().currentText()
+                filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+                self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+                
+                self.tree_manager.select_tree_item_by_index(self.current_index)
+            
+            if self.export_manager:
+                self.export_manager.on_shoe_click(
+                    event, shoe_index, current_item, self.current_index,
+                    save_state, mark_unsaved, refresh_display
+                )
+    
+    def _remove_shoe_from_subimage(self, shoe_index: int, tree_item: QTreeWidgetItem) -> None:
+        """Remove shoe from specific subimage (runner)."""
+        parent = tree_item.parent()
+        if not parent:
+            return
         
-        def save_state():
-            self.data_manager.save_state(self.current_index)
+        # Get participant index
+        participant_idx = tree_item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
+        if not isinstance(participant_idx, int) or participant_idx >= len(self.data_manager.data):
+            return
         
-        def mark_unsaved():
+        participant = self.data_manager.data[participant_idx]
+        runners = participant.get("runners_found", [])
+        
+        # Find which runner we're working with
+        child_index = parent.indexOfChild(tree_item)
+        if child_index >= len(runners):
+            return
+        
+        runner = runners[child_index]
+        shoes = runner.get("shoes", [])
+        
+        if shoe_index >= len(shoes):
+            return
+        
+        # Get shoe information for confirmation
+        shoe = shoes[shoe_index]
+        brand = (shoe.get("classification_label") or 
+                shoe.get("new_label") or 
+                shoe.get("label", "Unknown"))
+        
+        # Show confirmation dialog
+        from PyQt5.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self.main_window,
+            'Remove Shoe',
+            f'Tem certeza que deseja remover este tênis {brand} desta subimagem específica?',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # Save state for undo
+            self.data_manager.save_state(participant_idx)
+            
+            # Remove the shoe from this specific runner
+            shoes.pop(shoe_index)
+            runner["shoes"] = shoes
+            
+            # Mark as having unsaved changes
             self.mark_unsaved_changes()
-        
-        def refresh_display():
-            # Save expansion state before refreshing
-            expansion_state = self.tree_manager.get_expansion_state()
             
-            self.show_entry(self.current_index)
-            
-            # Repopulate tree with expansion state preserved
-            self.tree_manager.set_data(self.data_manager.data)
-            selected_category = self.main_window.get_category_filter().currentText()
-            selected_gender = self.main_window.get_gender_filter().currentText()
-            filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-            self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
-            
-            self.tree_manager.select_tree_item_by_index(self.current_index)
-        
-        if self.export_manager:
-            self.export_manager.on_shoe_click(
-                event, shoe_index, current_item, self.current_index,
-                save_state, mark_unsaved, refresh_display
-            )
-    
-    def _is_current_checked(self) -> bool:
-        """Check if current image is checked."""
-        if not self.data_manager.data or self.current_index >= len(self.data_manager.data):
-            return False
-        return self.data_manager.data[self.current_index].get('checked', False)
-    
-    # Keyboard handling
-    def eventFilter(self, obj, event):
-        """Handle keyboard events."""
-        tree = self.main_window.get_tree_widget()
-        if obj == tree and event.type() == QEvent.KeyPress:  # type: ignore[attr-defined]
-            key = event.key()
-            modifiers = event.modifiers()
-            key_text = event.text().lower()
-            
-            # Check for brand shortcuts
-            key_to_brand = self._get_key_to_brand_mapping()
-            if key_text in key_to_brand:
-                self.keyPressEvent(event)
-                return True
-            
-            # Custom shortcuts
-            if key == Qt.Key_C or key == Qt.Key_K or key == Qt.Key_Delete or \
-               (modifiers == Qt.ControlModifier and key == Qt.Key_Z) or \
-               key == Qt.Key_Return or key == Qt.Key_Enter:  # type: ignore[attr-defined]
-                self.keyPressEvent(event)
-                return True
-            
-            # Allow arrow key navigation
-            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):  # type: ignore[attr-defined]
-                return False
-        
-        return super().eventFilter(obj, event)
-    
-    def keyPressEvent(self, event: QKeyEvent):
-        """Handle key press events."""
-        if not self.data_manager.data:
-            return
-        
-        # Ctrl+Z for undo
-        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Z:  # type: ignore[attr-defined]
-            self._undo()
-            return
-        
-        # Brand shortcuts
-        key_text = event.text().lower()
-        key_to_brand = self._get_key_to_brand_mapping()
-        if key_text in key_to_brand:
-            if self._is_current_checked():
-                self.main_window.show_protected_image_message()
-                return
-            self._set_brand_by_key(key_text)
-            return
-        
-        is_checked = self._is_current_checked()
-        
-        # Delete key
-        if event.key() == Qt.Key_Delete:  # type: ignore[attr-defined]
-            if is_checked:
-                self.main_window.show_protected_image_message()
-                return
-            
-            current_tree_item = self.main_window.get_tree_widget().currentItem()
-            if current_tree_item:
-                if current_tree_item.childCount() > 0 and current_tree_item.data(0, Qt.UserRole) is None:  # type: ignore[attr-defined]
-                    # Remove all images with this bib number
-                    bib_number = current_tree_item.text(0)
-                    self._remove_all_images_with_bib(bib_number)
-                else:
-                    # Remove current image
-                    self._remove_current_image()
-            else:
-                self._remove_current_image()
-            return
-        
-        # K key - propagate data
-        if event.key() == Qt.Key_K:  # type: ignore[attr-defined]
-            if is_checked:
-                self.main_window.show_protected_image_message()
-                return
-            self._keep_only_current_image()
-            return
-        
-        # C key - toggle checked
-        if event.key() == Qt.Key_C:  # type: ignore[attr-defined]
-            self._toggle_checked()
-            return
-        
-        # Navigation
-        if event.key() == Qt.Key_Right or event.key() == Qt.Key_Down:  # type: ignore[attr-defined]
-            self.current_index = min(self.current_index + 1, len(self.data_manager.data) - 1)
-            self.show_entry(self.current_index)
-            return
-        if event.key() == Qt.Key_Left or event.key() == Qt.Key_Up:  # type: ignore[attr-defined]
-            self.current_index = max(self.current_index - 1, 0)
-            self.show_entry(self.current_index)
-            return
-        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:  # type: ignore[attr-defined]
-            if not is_checked:
-                self._apply_changes()
-            else:
-                self.main_window.show_protected_image_message()
-            return
-    
-    def _undo(self) -> None:
-        """Undo last change."""
-        # Save expansion state before undo
-        expansion_state = self.tree_manager.get_expansion_state()
-        
-        state = self.data_manager.undo()
-        if state:
-            self.current_index = state['current_index']
-            
-            # Repopulate tree with expansion state preserved
-            self.tree_manager.set_data(self.data_manager.data)
-            selected_category = self.main_window.get_category_filter().currentText()
-            selected_gender = self.main_window.get_gender_filter().currentText()
-            filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-            self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
-            
-            self.show_entry(self.current_index)
-            self.save_json()
-            self.update_status_bar()
-    
-    def _remove_current_image(self) -> None:
-        """Remove current image."""
-        # Save current state and expansion
-        selected_item_info = self.tree_manager.get_selected_item_info()
-        expansion_state = self.tree_manager.get_expansion_state()
-        
-        self.data_manager.save_state(self.current_index)
-        new_index = self.data_manager.remove_participant(self.current_index)
-        self.current_index = new_index
-        
-        # Repopulate tree with expansion state restored
-        self.tree_manager.set_data(self.data_manager.data)
-        selected_category = self.main_window.get_category_filter().currentText()
-        selected_gender = self.main_window.get_gender_filter().currentText()
-        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
-        
-        # Select appropriate next item
-        if selected_item_info:
-            self.tree_manager.select_next_item_after_deletion(selected_item_info, expansion_state)
-        else:
-            self.tree_manager.select_next_tree_item()
-        
-        self.mark_unsaved_changes()
-        self.update_status_bar()
-    
-    def _remove_all_images_with_bib(self, bib_number: str) -> None:
-        """Remove all images with specific bib number."""
-        # Save current state and expansion
-        selected_item_info = self.tree_manager.get_selected_item_info()
-        expansion_state = self.tree_manager.get_expansion_state()
-        
-        self.data_manager.save_state(self.current_index)
-        new_index = self.data_manager.remove_all_with_bib(bib_number)
-        self.current_index = new_index
-        
-        # Repopulate tree with expansion state restored
-        self.tree_manager.set_data(self.data_manager.data)
-        selected_category = self.main_window.get_category_filter().currentText()
-        selected_gender = self.main_window.get_gender_filter().currentText()
-        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
-        
-        # Select appropriate next item
-        if selected_item_info:
-            self.tree_manager.select_next_item_after_deletion(selected_item_info, expansion_state)
-        else:
-            self.tree_manager.select_next_tree_item()
-        
-        self.mark_unsaved_changes()
-        self.update_status_bar()
-    
-    def _keep_only_current_image(self) -> None:
-        """Keep current image as master and propagate data."""
-        # Save expansion state
-        expansion_state = self.tree_manager.get_expansion_state()
-        
-        self.data_manager.save_state(self.current_index)
-        self.data_manager.propagate_data_to_same_bib(self.current_index)
-        
-        # Note: Export functionality moved to manual export dialog (Tools > Export)
-        # No longer automatically exports when K is pressed
-        
-        # Repopulate tree with expansion state preserved
-        self.tree_manager.set_data(self.data_manager.data)
-        selected_category = self.main_window.get_category_filter().currentText()
-        selected_gender = self.main_window.get_gender_filter().currentText()
-        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
-        
-        self.show_entry(self.current_index)
-        self.tree_manager.select_tree_item_by_index(self.current_index)
-        self.mark_unsaved_changes()
-        self.update_status_bar()
-    
-    def _toggle_checked(self) -> None:
-        """Toggle checked status."""
-        self.data_manager.save_state(self.current_index)
-        new_status = self.data_manager.toggle_checked(self.current_index)
-        
-        self.mark_unsaved_changes()
-        self.update_status_bar()
-        self.show_entry(self.current_index)  # Refresh display
-    
-    def _apply_changes(self) -> None:
-        """Apply current changes."""
-        if self._is_current_checked():
-            return
-        
-        # Save expansion state and current selection
-        expansion_state = self.tree_manager.get_expansion_state()
-        current_selection_info = self.tree_manager.get_selected_item_info()
-        
-        bib_number = self.main_window.get_bib_number_field().text()
-        category = self.main_window.get_bib_category_field().currentText()
-        checked_brands = [
-            chk.text() for chk in self.main_window.get_brand_checks() 
-            if chk.isChecked()
-        ]
-        
-        self.data_manager.save_state(self.current_index)
-        self.data_manager.update_participant_data(self.current_index, bib_number, category, checked_brands)
-        
-        self.mark_unsaved_changes()
-        self.update_status_bar()
-        
-        # Repopulate tree with expansion state preserved
-        self.tree_manager.set_data(self.data_manager.data)
-        selected_category = self.main_window.get_category_filter().currentText()
-        selected_gender = self.main_window.get_gender_filter().currentText()
-        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
-        
-        # Try to select the same item or the next appropriate one
-        if current_selection_info:
-            # For shortcuts, we want to stay on the current item if possible
-            self.tree_manager.select_tree_item_by_index(self.current_index)
-        else:
-            self.tree_manager.select_next_tree_item()
-    
-    def _set_brand_by_key(self, key_char: str) -> None:
-        """Set brand based on key shortcut."""
-        config_labels = self.config.get("labels", [])
-        target_brand = None
-        
-        for label_config in config_labels:
-            if isinstance(label_config, dict) and label_config.get("key") == key_char.lower():
-                target_brand = label_config.get("label")
-                break
-        
-        if not target_brand:
-            return
-        
-        # Save expansion state and current selection
-        expansion_state = self.tree_manager.get_expansion_state()
-        
-        # Update brand checkboxes
-        brand_checks = self.main_window.get_brand_checks()
-        for chk in brand_checks:
-            chk.setChecked(chk.text() == target_brand)
-        
-        # Apply changes directly to maintain position
-        bib_number = self.main_window.get_bib_number_field().text()
-        category = self.main_window.get_bib_category_field().currentText()
-        checked_brands = [target_brand]  # Only the shortcut brand is selected
-        
-        self.data_manager.save_state(self.current_index)
-        self.data_manager.update_participant_data(self.current_index, bib_number, category, checked_brands)
-        
-        self.mark_unsaved_changes()
-        self.update_status_bar()
-        
-        # Repopulate tree with expansion state preserved
-        self.tree_manager.set_data(self.data_manager.data)
-        selected_category = self.main_window.get_category_filter().currentText()
-        selected_gender = self.main_window.get_gender_filter().currentText()
-        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
-        
-        # Stay on the current item (don't advance to next)
-        self.tree_manager.select_tree_item_by_index(self.current_index)
-    
-    def _get_key_to_brand_mapping(self) -> Dict[str, str]:
-        """Get key to brand mapping from config."""
-        config_labels = self.config.get("labels", [])
-        mapping = {}
-        
-        for label_config in config_labels:
-            if isinstance(label_config, dict):
-                key = label_config.get("key", "").lower()
-                label = label_config.get("label")
-                if key and label:
-                    mapping[key] = label
-        
-        return mapping
+            # Refresh the display with the current subimage
+            self._show_subimage_entry(participant_idx, tree_item)
+
+    # ...existing code...
     
     def closeEvent(self, event):
         """Handle application close."""
@@ -979,6 +743,58 @@ class RunnerViewerApp(QObject):
         else:
             # Fallback to normal show_entry
             self.show_entry(participant_idx)
+    
+    def _remove_current_subimage(self, tree_item: QTreeWidgetItem) -> None:
+        """Remove current subimage (specific runner) from participant."""
+        parent = tree_item.parent()
+        if not parent:
+            return
+        
+        # Get participant index
+        participant_idx = tree_item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
+        if not isinstance(participant_idx, int) or participant_idx >= len(self.data_manager.data):
+            return
+        
+        # Save current state and expansion
+        selected_item_info = self.tree_manager.get_selected_item_info()
+        expansion_state = self.tree_manager.get_expansion_state()
+        
+        self.data_manager.save_state(participant_idx)
+        
+        participant = self.data_manager.data[participant_idx]
+        runners = participant.get("runners_found", [])
+        
+        # Find which runner to remove based on tree position
+        child_index = parent.indexOfChild(tree_item)
+        if child_index < len(runners):
+            # Remove the specific runner
+            runners.pop(child_index)
+            
+            # If no runners left, remove the entire participant
+            if not runners:
+                new_index = self.data_manager.remove_participant(participant_idx)
+                self.current_index = new_index
+            else:
+                # Update the participant with remaining runners
+                participant["runners_found"] = runners
+                self.current_index = participant_idx
+        
+        # Repopulate tree with expansion state restored
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
+        # Select appropriate next item
+        if selected_item_info:
+            self.tree_manager.select_next_item_after_deletion(selected_item_info, expansion_state)
+        else:
+            self.tree_manager.select_next_tree_item()
+        
+        self.mark_unsaved_changes()
+        self.update_status_bar()
+
 def main():
     """Main entry point for the application."""
     app = QApplication(sys.argv)

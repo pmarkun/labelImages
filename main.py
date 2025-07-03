@@ -48,6 +48,8 @@ class RunnerViewerApp(QObject):
         self.genders: List[str] = []
         self.backup_done = False
         self.has_unsaved_changes = False
+        self.db_manager: Optional[DBManager] = None
+        self.race_id: Optional[int] = None
 
         # Pagination
         self.current_page = 0
@@ -86,10 +88,10 @@ class RunnerViewerApp(QObject):
         # Main window signals
         self.main_window.json_load_requested.connect(self.load_json)
         self.main_window.json_save_requested.connect(self.save_json)
-        self.main_window.json_save_as_requested.connect(self.save_as_json)
         self.main_window.base_path_change_requested.connect(self.select_base_path)
         self.main_window.export_requested.connect(self.open_export_dialog)
         self.main_window.export_csv_requested.connect(self.export_csv)
+        self.main_window.export_json_requested.connect(self.export_json)
         
         # Left panel signals
         self.main_window.left_panel.filter_changed.connect(self.on_filter_changed)
@@ -140,21 +142,30 @@ class RunnerViewerApp(QObject):
             QMessageBox.critical(self.main_window, "Error", f"Failed to load JSON file: {e}")
     
     def save_json(self) -> None:
-        """Save to current file."""
+        """Save to database if available, otherwise to current file."""
+        if self.race_id is not None and self.db_manager is not None:
+            try:
+                self.db_manager.update_race_data(self.race_id, self.data_manager.data)
+                self.has_unsaved_changes = False
+                self.update_window_title()
+            except Exception as e:
+                QMessageBox.critical(self.main_window, "Error", f"Failed to save to database: {e}")
+            return
+
         if not self.json_path:
             self.save_as_json()
             return
-        
+
         try:
             if not self.backup_done:
                 import shutil
                 shutil.copy(self.json_path, self.json_path + ".bak")
                 self.backup_done = True
-            
+
             self.data_manager.save_json(self.json_path, backup=False)
             self.has_unsaved_changes = False
             self.update_window_title()
-            
+
         except Exception as e:
             QMessageBox.critical(self.main_window, "Error", f"Failed to save JSON file: {e}")
     
@@ -255,6 +266,37 @@ class RunnerViewerApp(QObject):
                 self.main_window,
                 "Exportação Concluída",
                 f"CSV salvo em {csv_path}\n{exported} linhas exportadas."
+            )
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Erro", f"Falha ao exportar: {e}")
+
+    def export_json(self) -> None:
+        """Export current data to a JSON file."""
+        if not self.data_manager.data:
+            QMessageBox.information(
+                self.main_window,
+                "Nenhum Dados",
+                "Não há dados carregados para exportar."
+            )
+            return
+
+        from PyQt5.QtWidgets import QFileDialog
+
+        json_path, _ = QFileDialog.getSaveFileName(
+            self.main_window,
+            "Exportar JSON",
+            filter="JSON Files (*.json)"
+        )
+
+        if not json_path:
+            return
+
+        try:
+            self.data_manager.save_json(json_path, backup=False)
+            QMessageBox.information(
+                self.main_window,
+                "Exportação Concluída",
+                f"JSON salvo em {json_path}"
             )
         except Exception as e:
             QMessageBox.critical(self.main_window, "Erro", f"Falha ao exportar: {e}")
@@ -1554,8 +1596,12 @@ def main():
     def open_race(race_id: int) -> None:
         data = dbm.load_race_data(race_id)
         viewer.data_manager.load_data(data)
+        viewer.db_manager = dbm
+        viewer.race_id = race_id
+        viewer.json_path = ""
         viewer.collect_stats()
         viewer.populate_tree()
+        viewer.update_window_title()
         viewer.show()
 
     race_window.race_selected.connect(open_race)

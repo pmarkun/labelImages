@@ -24,6 +24,12 @@ class DataManager:
             self.data = json.load(f)
         self.cache.build_cache(self.data)
         self.undo_stack = []
+
+    def load_data(self, data: List[Dict[str, Any]]) -> None:
+        """Load data directly from a list of dictionaries."""
+        self.data = list(data)
+        self.cache.build_cache(self.data)
+        self.undo_stack = []
     
     def save_json(self, file_path: str, backup: bool = True) -> None:
         """Save data to JSON file."""

@@ -1,4 +1,6 @@
 PyQt5
 PyYAML
 Pillow
+SQLAlchemy
+psycopg2-binary
 

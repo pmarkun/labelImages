@@ -14,6 +14,8 @@ from ui.tree_widget import TreeManager
 from ui.image_display import ImageDisplayManager
 from ui.image_display import ExportManager
 from ui.export_dialog import ExportDialog
+from ui.race_manager import RaceManagerWindow
+from db.db_manager import DBManager
 from core.data_manager import DataManager
 from utils.config import load_config, save_config
 from utils.image_utils import clear_image_cache
@@ -1435,14 +1437,23 @@ class RunnerViewerApp(QObject):
         return sorted(brands), sorted(cats), sorted(genders)
 
 def main():
-    """Main entry point for the application."""
+    """Main entry point for the application with SQL support."""
     app = QApplication(sys.argv)
-    
-    # Create and show the application
+
+    dbm = DBManager()
+    race_window = RaceManagerWindow(dbm)
     viewer = RunnerViewerApp()
-    viewer.show()
-    
-    # Start the event loop
+
+    def open_race(race_id: int) -> None:
+        data = dbm.load_race_data(race_id)
+        viewer.data_manager.load_data(data)
+        viewer.collect_stats()
+        viewer.populate_tree()
+        viewer.show()
+
+    race_window.race_selected.connect(open_race)
+    race_window.show()
+
     sys.exit(app.exec_())
 
 

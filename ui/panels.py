@@ -136,7 +136,6 @@ class RightPanel(QWidget):
     
     # Signals
     bib_number_entered = pyqtSignal()
-    category_selected = pyqtSignal(int)
     brand_changed = pyqtSignal()
     
     def __init__(self):
@@ -166,11 +165,11 @@ class RightPanel(QWidget):
         self.bib_number.returnPressed.connect(lambda: self.bib_number_entered.emit())
         bib_layout.addWidget(self.bib_number)
         
-        # Bib category
+        # Bib category (display only)
         bib_layout.addWidget(QLabel("Categoria:"))
-        self.bib_category = QComboBox()
-        self.bib_category.activated.connect(self.category_selected.emit)
-        bib_layout.addWidget(self.bib_category)
+        self.bib_category_display = QLabel("Não definida")
+        self.bib_category_display.setStyleSheet("border: 1px solid #ddd; padding: 5px; background-color: #f9f9f9; border-radius: 3px;")
+        bib_layout.addWidget(self.bib_category_display)
         
         layout.addWidget(bib_group)
         

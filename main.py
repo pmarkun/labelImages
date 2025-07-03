@@ -89,7 +89,6 @@ class RunnerViewerApp(QObject):
         
         # Right panel signals
         self.main_window.right_panel.bib_number_entered.connect(self.on_bib_number_enter)
-        self.main_window.right_panel.category_selected.connect(self.on_category_selected)
         self.main_window.right_panel.brand_changed.connect(self.on_brand_changed_immediate)
         
         # Tree manager signals
@@ -237,10 +236,8 @@ class RunnerViewerApp(QObject):
         category_filter.addItems(self.genders)
     
     def _update_bib_category_combo(self) -> None:
-        """Update the bib category dropdown."""
-        bib_category = self.main_window.get_bib_category_field()
-        bib_category.clear()
-        bib_category.addItems(self.bib_categories)
+        """Update the bib category dropdown - no longer needed as it's display only."""
+        pass
     
     def _setup_brand_checkboxes(self) -> None:
         """Setup brand checkboxes."""
@@ -318,10 +315,9 @@ class RunnerViewerApp(QObject):
         
         bib_category_field = self.main_window.get_bib_category_field()
         if category and category in self.bib_categories:
-            bib_category_field.setCurrentText(category)
+            bib_category_field.setText(category)
         else:
-            bib_category_field.setCurrentIndex(-1)
-        bib_category_field.setEnabled(not is_checked)
+            bib_category_field.setText("Não definida")
         
         # Update brand checkboxes
         brand_checks = self.main_window.get_brand_checks()
@@ -353,10 +349,6 @@ class RunnerViewerApp(QObject):
         except:
             pass
         try:
-            self.main_window.right_panel.category_selected.disconnect()
-        except:
-            pass
-        try:
             self.main_window.right_panel.brand_changed.disconnect()
         except:
             pass
@@ -364,7 +356,6 @@ class RunnerViewerApp(QObject):
     def _reconnect_right_panel_signals(self) -> None:
         """Reconnect right panel signals."""
         self.main_window.right_panel.bib_number_entered.connect(self.on_bib_number_enter)
-        self.main_window.right_panel.category_selected.connect(self.on_category_selected)
         self.main_window.right_panel.brand_changed.connect(self.on_brand_changed_immediate)
     
     def update_status_bar(self) -> None:
@@ -436,6 +427,17 @@ class RunnerViewerApp(QObject):
         if self._is_current_checked():
             return
         
+        # Check if we're editing a subimage or main image
+        current_tree_item = self.main_window.get_tree_widget().currentItem()
+        if current_tree_item and current_tree_item.parent():
+            # This is a subimage - handle merging logic (item 3)
+            self._handle_subimage_bib_change(current_tree_item)
+        else:
+            # This is a main image - normal update (item 2 fix)
+            self._handle_main_image_bib_change()
+    
+    def _handle_main_image_bib_change(self) -> None:
+        """Handle BIB number change for main image."""
         # Save expansion state
         expansion_state = self.tree_manager.get_expansion_state()
         
@@ -459,27 +461,85 @@ class RunnerViewerApp(QObject):
         
         self.tree_manager.select_next_tree_item()
     
-    def on_category_selected(self, index: int) -> None:
-        """Handle category selection."""
-        if not self.data_manager.data or self.current_index >= len(self.data_manager.data):
+    def _handle_subimage_bib_change(self, tree_item: QTreeWidgetItem) -> None:
+        """Handle BIB number change for subimage with merging logic."""
+        parent = tree_item.parent()
+        if not parent:
             return
         
-        if self._is_current_checked():
+        # Get participant index
+        participant_idx = tree_item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
+        if not isinstance(participant_idx, int) or participant_idx >= len(self.data_manager.data):
             return
+        
+        participant = self.data_manager.data[participant_idx]
+        runners = participant.get("runners_found", [])
+        
+        # Find which runner we're working with
+        child_index = parent.indexOfChild(tree_item)
+        if child_index >= len(runners):
+            return
+        
+        runner = runners[child_index]
+        new_bib = self.main_window.get_bib_number_field().text()
+        
+        # Find existing participant with this BIB number
+        target_participant = None
+        target_index = None
+        for i, existing_participant in enumerate(self.data_manager.data):
+            if existing_participant.get("bib_number") == new_bib:
+                target_participant = existing_participant
+                target_index = i
+                break
+        
+        # Save state for undo
+        self.data_manager.save_state(participant_idx)
+        
+        # Remove the runner from the current participant
+        runners.pop(child_index)
+        
+        if target_participant:
+            # Merge with existing participant - inherit category and gender
+            runner["inherited_category"] = target_participant.get("run_category", "")
+            runner["inherited_gender"] = target_participant.get("gender", "")
+            
+            # Add runner to target participant
+            target_runners = target_participant.get("runners_found", [])
+            target_runners.append(runner)
+            target_participant["runners_found"] = target_runners
+            
+            # Update bib number in the runner data if needed
+            runner["bib_number"] = new_bib
+        else:
+            # Create new participant with this BIB number
+            new_participant = {
+                "bib_number": new_bib,
+                "run_category": "",  # Will be inherited from somewhere else if available
+                "gender": "",
+                "runners_found": [runner],
+                "checked": False
+            }
+            # Update bib number in the runner data
+            runner["bib_number"] = new_bib
+            self.data_manager.data.append(new_participant)
+            target_index = len(self.data_manager.data) - 1
+        
+        # If original participant has no more runners, remove it
+        if not runners:
+            self.data_manager.data.pop(participant_idx)
+            # Adjust target_index if needed
+            if target_index is not None and target_index > participant_idx:
+                target_index -= 1
+        else:
+            # Update the original participant
+            participant["runners_found"] = runners
+        
+        # Update current index to the target participant
+        if target_index is not None:
+            self.current_index = target_index
         
         # Save expansion state
         expansion_state = self.tree_manager.get_expansion_state()
-        
-        category_text = self.main_window.get_bib_category_field().currentText()
-        if not category_text:
-            return
-        
-        # Save state for undo
-        self.data_manager.save_state(self.current_index)
-        
-        # Update data (new format: run_category at participant level)
-        item = self.data_manager.data[self.current_index]
-        item["run_category"] = category_text
         
         self.mark_unsaved_changes()
         
@@ -490,7 +550,9 @@ class RunnerViewerApp(QObject):
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
         self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
         
-        self.tree_manager.select_next_tree_item()
+        # Select the target participant
+        if target_index is not None:
+            self.tree_manager.select_tree_item_by_index(target_index)
     
     def on_brand_changed_immediate(self) -> None:
         """Handle immediate brand changes."""
@@ -513,7 +575,7 @@ class RunnerViewerApp(QObject):
         self._update_participant_data(
             self.current_index, 
             self.main_window.get_bib_number_field().text(),
-            self.main_window.get_bib_category_field().currentText(),
+            "",  # Category is now display-only
             checked_brands
         )
         
@@ -1017,7 +1079,7 @@ class RunnerViewerApp(QObject):
         current_selection_info = self.tree_manager.get_selected_item_info()
         
         bib_number = self.main_window.get_bib_number_field().text()
-        category = self.main_window.get_bib_category_field().currentText()
+        category = ""  # Category is now display-only
         checked_brands = [
             chk.text() for chk in self.main_window.get_brand_checks() 
             if chk.isChecked()
@@ -1066,7 +1128,7 @@ class RunnerViewerApp(QObject):
         
         # Apply changes directly to maintain position
         bib_number = self.main_window.get_bib_number_field().text()
-        category = self.main_window.get_bib_category_field().currentText()
+        category = ""  # Category is now display-only
         checked_brands = [target_brand]  # Only the shortcut brand is selected
         
         self.data_manager.save_state(self.current_index)

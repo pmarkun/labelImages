@@ -258,9 +258,9 @@ class RunnerViewerMainWindow(QMainWindow):
         """Get the bib number input field."""
         return self.right_panel.bib_number
     
-    def get_bib_category_field(self) -> QComboBox:
-        """Get the bib category combo box."""
-        return self.right_panel.bib_category
+    def get_bib_category_field(self) -> QLabel:
+        """Get the bib category display label."""
+        return self.right_panel.bib_category_display
     
     def get_brand_checks(self) -> List[QCheckBox]:
         """Get the list of brand checkboxes."""

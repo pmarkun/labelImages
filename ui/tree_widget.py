@@ -25,7 +25,16 @@ class TreeManager(QObject):
         self.data = data
         self.cache.build_cache(data)
     
-    def populate_tree(self, selected_category: Optional[str] = None, selected_gender: Optional[str] = None, filter_unchecked_only: bool = False, restore_expansion: Optional[Dict[str, bool]] = None) -> None:
+    def populate_tree(
+        self,
+        selected_category: Optional[str] = None,
+        selected_gender: Optional[str] = None,
+        filter_unchecked_only: bool = False,
+        restore_expansion: Optional[Dict[str, bool]] = None,
+        *,
+        page: int = 0,
+        page_size: int = 100,
+    ) -> None:
         """Populate the tree with bib numbers and images."""
         self.tree.clear()
         
@@ -64,7 +73,12 @@ class TreeManager(QObject):
             except Exception:
                 return 999999  # '?' or invalid goes to the end
         relevant_bibs.sort(key=get_participant_position)
-        
+
+        if page_size:
+            start = page * page_size
+            end = start + page_size
+            relevant_bibs = relevant_bibs[start:end]
+
         # Create tree nodes
         for cache_data in relevant_bibs:
             bib_number = cache_data['bib_number']

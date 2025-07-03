@@ -48,6 +48,11 @@ class RunnerViewerApp(QObject):
         self.genders: List[str] = []
         self.backup_done = False
         self.has_unsaved_changes = False
+
+        # Pagination
+        self.current_page = 0
+        self.page_size = 100
+        self.total_pages = 1
         
         # Initialize components
         self.data_manager = DataManager()
@@ -89,6 +94,8 @@ class RunnerViewerApp(QObject):
         # Left panel signals
         self.main_window.left_panel.filter_changed.connect(self.on_filter_changed)
         self.main_window.left_panel.item_selected.connect(self.on_item_selected)
+        self.main_window.left_panel.prev_page_requested.connect(self.prev_page)
+        self.main_window.left_panel.next_page_requested.connect(self.next_page)
         
         # Right panel signals
         self.main_window.right_panel.bib_number_entered.connect(self.on_bib_number_enter)
@@ -189,7 +196,14 @@ class RunnerViewerApp(QObject):
                 selected_category = self.main_window.get_category_filter().currentText()
                 selected_gender = self.main_window.get_gender_filter().currentText()
                 filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-                self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+                self.tree_manager.populate_tree(
+                    selected_category,
+                    selected_gender,
+                    filter_unchecked_only,
+                    restore_expansion=expansion_state,
+                    page=self.current_page,
+                    page_size=self.page_size,
+                )
                 
                 self.show_entry(0)
     
@@ -255,6 +269,11 @@ class RunnerViewerApp(QObject):
         self._update_bib_category_combo()
         self._setup_brand_checkboxes()
         self._setup_shortcuts_info()
+        # Setup pagination
+        total_items = len(self.data_manager.data)
+        self.total_pages = max(1, (total_items + self.page_size - 1) // self.page_size)
+        self.current_page = 0
+        self.main_window.left_panel.update_pagination(self.current_page + 1, self.total_pages)
     
     def _update_category_filter(self) -> None:
         """Update the category filter dropdown."""
@@ -286,12 +305,18 @@ class RunnerViewerApp(QObject):
     def populate_tree(self) -> None:
         """Populate the tree widget."""
         self.tree_manager.set_data(self.data_manager.data)
-        
+
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
+        self.main_window.left_panel.update_pagination(self.current_page + 1, self.total_pages)
     
     def show_entry(self, index: int) -> None:
         """Display entry using FastImageDisplayManager."""
@@ -437,6 +462,18 @@ class RunnerViewerApp(QObject):
                 if first_item:
                     tree.setCurrentItem(first_item)
                     self.on_item_selected(first_item, None)
+
+    def next_page(self) -> None:
+        """Go to the next page if available."""
+        if self.current_page + 1 < self.total_pages:
+            self.current_page += 1
+            self.populate_tree()
+
+    def prev_page(self) -> None:
+        """Go to the previous page if available."""
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.populate_tree()
     
     def on_item_selected(self, current: QTreeWidgetItem, previous=None) -> None:
         """Handle tree item selection."""
@@ -492,7 +529,14 @@ class RunnerViewerApp(QObject):
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            restore_expansion=expansion_state,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
         
         self.tree_manager.select_next_tree_item()
     
@@ -583,7 +627,14 @@ class RunnerViewerApp(QObject):
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            restore_expansion=expansion_state,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
         
         # Select the target participant
         if target_index is not None:
@@ -696,7 +747,14 @@ class RunnerViewerApp(QObject):
                 selected_category = self.main_window.get_category_filter().currentText()
                 selected_gender = self.main_window.get_gender_filter().currentText()
                 filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-                self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+                self.tree_manager.populate_tree(
+                    selected_category,
+                    selected_gender,
+                    filter_unchecked_only,
+                    restore_expansion=expansion_state,
+                    page=self.current_page,
+                    page_size=self.page_size,
+                )
                 
                 self.tree_manager.select_tree_item_by_index(self.current_index)
             
@@ -989,7 +1047,14 @@ class RunnerViewerApp(QObject):
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            restore_expansion=expansion_state,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
         
         # Select appropriate next item
         if selected_item_info:
@@ -1014,7 +1079,14 @@ class RunnerViewerApp(QObject):
             selected_category = self.main_window.get_category_filter().currentText()
             selected_gender = self.main_window.get_gender_filter().currentText()
             filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-            self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+            self.tree_manager.populate_tree(
+                selected_category,
+                selected_gender,
+                filter_unchecked_only,
+                restore_expansion=expansion_state,
+                page=self.current_page,
+                page_size=self.page_size,
+            )
             
             self.show_entry(self.current_index)
             self.save_json()
@@ -1035,7 +1107,14 @@ class RunnerViewerApp(QObject):
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            restore_expansion=expansion_state,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
         
         # Select appropriate next item
         if selected_item_info:
@@ -1061,7 +1140,14 @@ class RunnerViewerApp(QObject):
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            restore_expansion=expansion_state,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
         
         # Select appropriate next item
         if selected_item_info:
@@ -1147,7 +1233,14 @@ class RunnerViewerApp(QObject):
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            restore_expansion=expansion_state,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
         
         # Show the main entry (now the promoted subitem)
         self.show_entry(self.current_index)
@@ -1170,7 +1263,14 @@ class RunnerViewerApp(QObject):
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            restore_expansion=expansion_state,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
         
         self.show_entry(self.current_index)
         self.tree_manager.select_tree_item_by_index(self.current_index)
@@ -1213,7 +1313,14 @@ class RunnerViewerApp(QObject):
         selected_category = self.main_window.get_category_filter().currentText()
         selected_gender = self.main_window.get_gender_filter().currentText()
         filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        self.tree_manager.populate_tree(
+            selected_category,
+            selected_gender,
+            filter_unchecked_only,
+            restore_expansion=expansion_state,
+            page=self.current_page,
+            page_size=self.page_size,
+        )
         
         # Try to select the same item or the next appropriate one
         if current_selection_info:

@@ -4,19 +4,21 @@ UI panels for the Runner Viewer application.
 from typing import List
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget, 
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
     QComboBox, QCheckBox, QGroupBox, QLineEdit, QGridLayout,
-    QScrollArea, QSizePolicy
+    QScrollArea, QSizePolicy, QPushButton
 )
 from .widgets import ClickableLabel
 
 
 class LeftPanel(QWidget):
     """Left panel containing navigation tree and filters."""
-    
+
     # Signals
     filter_changed = pyqtSignal()
     item_selected = pyqtSignal(object, object)  # current, previous
+    prev_page_requested = pyqtSignal()
+    next_page_requested = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -62,10 +64,28 @@ class LeftPanel(QWidget):
         self.tree.setHeaderLabels(["Categoria / Dorsal / Nome"])
         self.tree.currentItemChanged.connect(self._on_item_changed)
         layout.addWidget(self.tree)
-    
+
+        # Pagination controls
+        page_row = QHBoxLayout()
+        self.prev_page_btn = QPushButton("Anterior")
+        self.next_page_btn = QPushButton("Próxima")
+        self.page_label = QLabel("1/1")
+        self.prev_page_btn.clicked.connect(lambda: self.prev_page_requested.emit())
+        self.next_page_btn.clicked.connect(lambda: self.next_page_requested.emit())
+        page_row.addWidget(self.prev_page_btn)
+        page_row.addWidget(self.page_label, alignment=Qt.AlignCenter)
+        page_row.addWidget(self.next_page_btn)
+        layout.addLayout(page_row)
+
     def _on_item_changed(self, current, previous):
         """Handle tree item selection change."""
         self.item_selected.emit(current, previous)
+
+    def update_pagination(self, current: int, total: int) -> None:
+        """Update pagination controls state and label."""
+        self.page_label.setText(f"Página {current}/{total}")
+        self.prev_page_btn.setEnabled(current > 1)
+        self.next_page_btn.setEnabled(current < total)
 
 
 class CenterPanel(QWidget):

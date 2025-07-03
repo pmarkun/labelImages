@@ -94,3 +94,19 @@ class DBManager:
         dm = DataManager()
         dm.load_data(data)
         return dm.export_simplified_csv(path)
+
+    def update_race_data(self, race_id: int, data: List[Dict[str, Any]]) -> None:
+        """Replace all participant data for a race."""
+        session = self.Session()
+        try:
+            race = session.get(Race, race_id)
+            if not race:
+                return
+            # Remove existing participants
+            session.query(Participant).filter(Participant.race_id == race_id).delete()
+            # Add new participants
+            for item in data:
+                session.add(Participant(race_id=race_id, data=json.dumps(item)))
+            session.commit()
+        finally:
+            session.close()

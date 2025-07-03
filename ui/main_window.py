@@ -21,7 +21,7 @@ class RunnerViewerMainWindow(QMainWindow):
     # Signals for communication with the main application
     json_load_requested = pyqtSignal(str)  # file_path
     json_save_requested = pyqtSignal()
-    json_save_as_requested = pyqtSignal()
+    export_json_requested = pyqtSignal()
     base_path_change_requested = pyqtSignal()
     configuration_requested = pyqtSignal()
     export_requested = pyqtSignal()
@@ -142,25 +142,24 @@ class RunnerViewerMainWindow(QMainWindow):
         save_json.triggered.connect(lambda: self.json_save_requested.emit())
         save_json.setShortcut("Ctrl+S")
         
-        save_as_json = QAction("💾 Salvar Como...", self)
-        save_as_json.triggered.connect(lambda: self.json_save_as_requested.emit())
-        save_as_json.setShortcut("Ctrl+Shift+S")
-        
         set_base = QAction("📁 Definir Base Path", self)
         set_base.triggered.connect(lambda: self.base_path_change_requested.emit())
 
         export_csv = QAction("📝 Exportar CSV", self)
         export_csv.triggered.connect(lambda: self.export_csv_requested.emit())
 
+        export_json = QAction("📤 Exportar JSON", self)
+        export_json.triggered.connect(lambda: self.export_json_requested.emit())
+
         file_menu = self.menuBar().addMenu("Arquivo")
         if file_menu:
             file_menu.addAction(open_json)
             file_menu.addSeparator()
             file_menu.addAction(save_json)
-            file_menu.addAction(save_as_json)
             file_menu.addSeparator()
             file_menu.addAction(set_base)
             file_menu.addAction(export_csv)
+            file_menu.addAction(export_json)
         
         # Tools menu
         config_action = QAction("⚙️ Configurações", self)

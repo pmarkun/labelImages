@@ -6,7 +6,7 @@ import sys
 import copy
 from typing import List, Dict, Any, Optional
 from PyQt5.QtCore import QEvent, QObject, Qt, QTimer
-from PyQt5.QtGui import QKeyEvent
+from PyQt5.QtGui import QKeyEvent, QCursor
 from PyQt5.QtWidgets import QApplication, QCheckBox, QTreeWidgetItem, QMessageBox
 
 from ui.main_window import RunnerViewerMainWindow
@@ -1039,6 +1039,88 @@ class RunnerViewerApp(QObject):
     
     def _keep_only_current_image(self) -> None:
         """Keep current image as master and propagate data."""
+        # Get current tree selection to understand context
+        current_tree_item = self.main_window.get_tree_widget().currentItem()
+        
+        if current_tree_item and current_tree_item.parent():
+            # We're in a subitem - make this subitem the main item and propagate its shoes
+            self._promote_subitem_to_main(current_tree_item)
+        else:
+            # We're in the main item - use original behavior (propagate to same bib)
+            self._propagate_to_same_bib_original()
+    
+    def _promote_subitem_to_main(self, tree_item: QTreeWidgetItem) -> None:
+        """Promote current subitem to main and propagate its shoe brands to all subitems."""
+        parent = tree_item.parent()
+        if not parent:
+            return
+        
+        # Get participant index
+        participant_idx = tree_item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
+        if not isinstance(participant_idx, int) or participant_idx >= len(self.data_manager.data):
+            return
+        
+        # Save expansion state
+        expansion_state = self.tree_manager.get_expansion_state()
+        
+        self.data_manager.save_state(participant_idx)
+        
+        participant = self.data_manager.data[participant_idx]
+        runners = participant.get("runners_found", [])
+        
+        # Find which runner is currently selected
+        child_index = parent.indexOfChild(tree_item)
+        if child_index >= len(runners):
+            return
+        
+        # Get the selected runner (this will become the main)
+        selected_runner = runners[child_index]
+        selected_shoes = selected_runner.get("shoes", [])
+        
+        # Extract shoe brands from the selected runner
+        shoe_brands = []
+        for shoe in selected_shoes:
+            brand = (shoe.get("classification_label") or 
+                    shoe.get("new_label") or 
+                    shoe.get("label", ""))
+            shoe_brands.append(brand)
+        
+        # Move the selected runner to position 0 (make it the main)
+        runners.pop(child_index)
+        runners.insert(0, selected_runner)
+        
+        # Update all runners to have the same shoe brands as the selected one
+        for runner in runners:
+            runner_shoes = runner.get("shoes", [])
+            for i, shoe in enumerate(runner_shoes):
+                if i < len(shoe_brands) and shoe_brands[i]:
+                    # Apply the brand from the selected runner
+                    if "classification_label" in shoe:
+                        shoe["classification_label"] = shoe_brands[i]
+                    elif "new_label" in shoe:
+                        shoe["new_label"] = shoe_brands[i]
+                    else:
+                        shoe["new_label"] = shoe_brands[i]
+        
+        # Update participant
+        participant["runners_found"] = runners
+        
+        self.mark_unsaved_changes()
+        
+        # Repopulate tree with expansion state preserved
+        self.tree_manager.set_data(self.data_manager.data)
+        selected_category = self.main_window.get_category_filter().currentText()
+        selected_gender = self.main_window.get_gender_filter().currentText()
+        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
+        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        
+        # Show the main entry (now the promoted subitem)
+        self.show_entry(self.current_index)
+        self.tree_manager.select_tree_item_by_index(self.current_index)
+        self.update_status_bar()
+    
+    def _propagate_to_same_bib_original(self) -> None:
+        """Original behavior: propagate to all participants with same bib number."""
         # Save expansion state
         expansion_state = self.tree_manager.get_expansion_state()
         
@@ -1106,46 +1188,154 @@ class RunnerViewerApp(QObject):
             self.tree_manager.select_next_tree_item()
     
     def _set_brand_by_key(self, key_char: str) -> None:
-        """Set brand based on key shortcut."""
-        config_labels = self.config.get("labels", [])
-        target_brand = None
+        """Set brand based on key shortcut."""        
+        # Show busy cursor
+        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))  # type: ignore[attr-defined]
         
-        for label_config in config_labels:
-            if isinstance(label_config, dict) and label_config.get("key") == key_char.lower():
-                target_brand = label_config.get("label")
-                break
-        
-        if not target_brand:
+        try:
+            config_labels = self.config.get("labels", [])
+            target_brand = None
+            
+            for label_config in config_labels:
+                if isinstance(label_config, dict) and label_config.get("key") == key_char.lower():
+                    target_brand = label_config.get("label")
+                    break
+            
+            if not target_brand:
+                return
+            
+            # Get current tree selection info to restore it later
+            current_tree_item = self.main_window.get_tree_widget().currentItem()
+            current_item_info = None
+            if current_tree_item:
+                parent_text = None
+                parent_item = current_tree_item.parent()
+                if parent_item:
+                    parent_text = parent_item.text(0)
+                
+                current_item_info = {
+                    'text': current_tree_item.text(0),
+                    'user_role': current_tree_item.data(0, Qt.UserRole),  # type: ignore[attr-defined]
+                    'parent_text': parent_text
+                }
+            
+            # Update brand checkboxes without triggering signals
+            self._disconnect_right_panel_signals()
+            
+            brand_checks = self.main_window.get_brand_checks()
+            for chk in brand_checks:
+                chk.setChecked(chk.text() == target_brand)
+            
+            # Save state for undo
+            self.data_manager.save_state(self.current_index)
+            
+            # Check if we're in a subitem or main item
+            if current_tree_item and current_tree_item.parent():
+                # We're in a subitem - update only this specific runner's shoes
+                self._update_subitem_shoes_only(current_tree_item, target_brand)
+            else:
+                # We're in the main item - update only the first runner's shoes (displayed)
+                self._update_main_item_first_runner_shoes(target_brand)
+            
+            self.mark_unsaved_changes()
+            
+            # Reconnect signals
+            self._reconnect_right_panel_signals()
+            
+            # Only refresh the current display without full tree rebuild
+            self.show_entry(self.current_index)
+            
+            # Restore the exact same tree selection
+            if current_item_info:
+                self._restore_tree_selection(current_item_info)
+                
+        finally:
+            # Always restore cursor
+            QApplication.restoreOverrideCursor()
+    
+    def _update_subitem_shoes_only(self, tree_item: QTreeWidgetItem, brand: str) -> None:
+        """Update shoes only for the specific subitem (runner)."""
+        parent = tree_item.parent()
+        if not parent:
             return
         
-        # Save expansion state and current selection
-        expansion_state = self.tree_manager.get_expansion_state()
+        # Get participant index
+        participant_idx = tree_item.data(0, Qt.UserRole)  # type: ignore[attr-defined]
+        if not isinstance(participant_idx, int) or participant_idx >= len(self.data_manager.data):
+            return
         
-        # Update brand checkboxes
-        brand_checks = self.main_window.get_brand_checks()
-        for chk in brand_checks:
-            chk.setChecked(chk.text() == target_brand)
+        participant = self.data_manager.data[participant_idx]
+        runners = participant.get("runners_found", [])
         
-        # Apply changes directly to maintain position
-        bib_number = self.main_window.get_bib_number_field().text()
-        category = ""  # Category is now display-only
-        checked_brands = [target_brand]  # Only the shortcut brand is selected
+        # Find which specific runner we're working with
+        child_index = parent.indexOfChild(tree_item)
+        if child_index >= len(runners):
+            return
         
-        self.data_manager.save_state(self.current_index)
-        self.data_manager.update_participant_data(self.current_index, bib_number, category, checked_brands)
+        runner = runners[child_index]
+        shoes = runner.get("shoes", [])
         
-        self.mark_unsaved_changes()
-        self.update_status_bar()
+        # Update only this runner's shoes
+        for shoe in shoes:
+            # Clear existing brands
+            if "classification_label" in shoe:
+                shoe["classification_label"] = brand
+            elif "new_label" in shoe:
+                shoe["new_label"] = brand
+            else:
+                shoe["new_label"] = brand
+    
+    def _update_main_item_first_runner_shoes(self, brand: str) -> None:
+        """Update shoes only for the first runner (displayed in main item)."""
+        if not (0 <= self.current_index < len(self.data_manager.data)):
+            return
         
-        # Repopulate tree with expansion state preserved
-        self.tree_manager.set_data(self.data_manager.data)
-        selected_category = self.main_window.get_category_filter().currentText()
-        selected_gender = self.main_window.get_gender_filter().currentText()
-        filter_unchecked_only = self.main_window.get_filter_unchecked_only().isChecked()
-        self.tree_manager.populate_tree(selected_category, selected_gender, filter_unchecked_only, expansion_state)
+        participant = self.data_manager.data[self.current_index]
+        runners = participant.get("runners_found", [])
         
-        # Stay on the current item (don't advance to next)
-        self.tree_manager.select_tree_item_by_index(self.current_index)
+        if not runners:
+            return
+        
+        # Update only the first runner's shoes (the one displayed in main view)
+        first_runner = runners[0]
+        shoes = first_runner.get("shoes", [])
+        
+        for shoe in shoes:
+            # Clear existing brands and set new one
+            if "classification_label" in shoe:
+                shoe["classification_label"] = brand
+            elif "new_label" in shoe:
+                shoe["new_label"] = brand
+            else:
+                shoe["new_label"] = brand
+    
+    def _restore_tree_selection(self, item_info: Dict[str, Any]) -> None:
+        """Restore tree selection to the exact same item."""
+        tree = self.main_window.get_tree_widget()
+        
+        # Find and select the same item
+        for i in range(tree.topLevelItemCount()):
+            top_item = tree.topLevelItem(i)
+            if not top_item:
+                continue
+                
+            # Check if this is the target top-level item
+            if (item_info['parent_text'] is None and 
+                top_item.text(0) == item_info['text'] and
+                top_item.data(0, Qt.UserRole) == item_info['user_role']):  # type: ignore[attr-defined]
+                tree.setCurrentItem(top_item)
+                return
+            
+            # Check child items
+            if (item_info['parent_text'] and 
+                top_item.text(0) == item_info['parent_text']):
+                for j in range(top_item.childCount()):
+                    child_item = top_item.child(j)
+                    if (child_item and 
+                        child_item.text(0) == item_info['text'] and
+                        child_item.data(0, Qt.UserRole) == item_info['user_role']):  # type: ignore[attr-defined]
+                        tree.setCurrentItem(child_item)
+                        return
     
     def _get_key_to_brand_mapping(self) -> Dict[str, str]:
         """Get key to brand mapping from config."""

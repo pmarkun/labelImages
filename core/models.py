@@ -20,9 +20,18 @@ class DataCache:
             if category == "Not Identifiable":
                 category = "?"
             gender = participant.get("gender", "Desconhecido")
+            
+            # Check if this participant has valid images
+            has_valid_image = False
+            runners = participant.get("runners_found", [])
+            for runner in runners:
+                img_path = runner.get("image") or runner.get("image_path")
+                if img_path:
+                    has_valid_image = True
+                    break
+            
             # Confidence: sum over shoes in first runner (if any)
             total_confidence = 0
-            runners = participant.get("runners_found", [])
             if runners:
                 for shoe in runners[0].get("shoes", []):
                     confidence = shoe.get("confidence", 0)
@@ -39,6 +48,7 @@ class DataCache:
                     'category': category,
                     'gender': gender,
                     'position': position,
+                    'has_valid_image': has_valid_image,
                 }
     
     def get_best_participant_for_bib(self, bib_number: str, category=None, gender=None) -> Dict[str, Any]:

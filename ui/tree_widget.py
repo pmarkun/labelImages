@@ -77,12 +77,12 @@ class TreeManager(QObject):
             category = cache_data["category"]
             has_valid_image = cache_data.get('has_valid_image', True)
             
+            # Skip entries without valid images
+            if not has_valid_image:
+                continue
+            
             # Create the bib node with format [Position]. [Gender] ([Bib Number])
             bib_text = f"{position}. {category} {gender} ({bib_number})"
-            
-            # Add indication if no images
-            if not has_valid_image:
-                bib_text += " [Sem imagens]"
             
             bib_node = QTreeWidgetItem(self.tree, [bib_text])
             
@@ -97,13 +97,8 @@ class TreeManager(QObject):
                 'has_valid_image': has_valid_image
             })
             
-            # Only add dummy child if there are valid images
-            if has_valid_image:
-                # Add a dummy child so the expansion triangle appears
-                dummy_child = QTreeWidgetItem(bib_node, ["Carregando..."])
-            else:
-                # Disable expansion for items without images
-                bib_node.setFlags(bib_node.flags() & ~Qt.ItemIsSelectable)  # type: ignore[attr-defined]
+            # Add a dummy child so the expansion triangle appears
+            dummy_child = QTreeWidgetItem(bib_node, ["Carregando..."])
         
         # Connect the tree expansion signal to load children on demand
         if not self._expansion_connected:
@@ -121,17 +116,6 @@ class TreeManager(QObject):
         # Check if this item needs to load children
         item_data = item.data(1, Qt.UserRole)  # type: ignore[attr-defined]
         if not isinstance(item_data, dict) or item_data.get('loaded', True):
-            return
-        
-        # Check if this item has valid images
-        has_valid_image = item_data.get('has_valid_image', True)
-        if not has_valid_image:
-            # Remove dummy child and add message
-            item.takeChildren()
-            no_image_child = QTreeWidgetItem(item, ["Nenhuma imagem encontrada"])
-            no_image_child.setFlags(no_image_child.flags() & ~Qt.ItemIsSelectable)  # type: ignore[attr-defined]
-            item_data['loaded'] = True
-            item.setData(1, Qt.UserRole, item_data)  # type: ignore[attr-defined]
             return
         
         bib_number = item_data.get('bib_number')

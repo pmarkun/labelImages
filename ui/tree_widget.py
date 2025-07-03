@@ -19,6 +19,9 @@ class TreeManager(QObject):
         self.data: List[Dict[str, Any]] = []
         self.cache = DataCache()
         self._expansion_connected = False
+
+        # Performance tweaks for large datasets
+        self.tree.setUniformRowHeights(True)
     
     def set_data(self, data: List[Dict[str, Any]]) -> None:
         """Set the data and rebuild cache."""
@@ -27,6 +30,9 @@ class TreeManager(QObject):
     
     def populate_tree(self, selected_category: Optional[str] = None, selected_gender: Optional[str] = None, filter_unchecked_only: bool = False, restore_expansion: Optional[Dict[str, bool]] = None) -> None:
         """Populate the tree with bib numbers and images."""
+        # Disable updates and signals for faster population
+        self.tree.setUpdatesEnabled(False)
+        self.tree.blockSignals(True)
         self.tree.clear()
         
         if selected_category == "Todas as categorias":
@@ -116,6 +122,10 @@ class TreeManager(QObject):
             self.restore_expansion_state(restore_expansion)
         else:
             self.tree.collapseAll()
+
+        # Re-enable updates and signals
+        self.tree.blockSignals(False)
+        self.tree.setUpdatesEnabled(True)
     
     def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
         """Load children when a bib node is expanded."""

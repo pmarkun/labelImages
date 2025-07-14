@@ -64,7 +64,7 @@ class ExportImagesWorker(QThread):
 
                 has_bib = False
                 for runner in item.get("runners_found", []):
-                    chest = runner.get("chest_plate")
+                    chest = runner.get("bib")
                     if chest and chest.get("bbox"):
                         has_bib = True
                         break
@@ -110,7 +110,7 @@ class ExportImagesWorker(QThread):
 
                     # Person crop
                     if self.export_types.get("person", False):
-                        bbox = runner.get("bbox")
+                        bbox = runner.get("person_bbox")
                         if bbox and len(bbox) >= 4:
                             img = load_image_cached(img_src)
                             crop = crop_image(img, bbox)
@@ -127,7 +127,7 @@ class ExportImagesWorker(QThread):
 
                     # Bib crop
                     if self.export_types.get("bibs", False):
-                        chest = runner.get("chest_plate")
+                        chest = runner.get("bib")
                         if chest:
                             bbox = chest.get("bbox")
                             if bbox and len(bbox) >= 4:

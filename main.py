@@ -14,6 +14,7 @@ from ui.tree_widget import TreeManager
 from ui.image_display import ImageDisplayManager
 from ui.image_display import ExportManager
 from ui.export_dialog import ExportDialog
+from ui.export_images_dialog import ExportImagesDialog
 from ui.race_manager import RaceManagerWindow
 from db.db_manager import DBManager
 from core.data_manager import DataManager
@@ -92,6 +93,7 @@ class RunnerViewerApp(QObject):
         self.main_window.export_requested.connect(self.open_export_dialog)
         self.main_window.export_csv_requested.connect(self.export_csv)
         self.main_window.export_json_requested.connect(self.export_json)
+        self.main_window.export_images_requested.connect(self.open_export_images_dialog)
         
         # Left panel signals
         self.main_window.left_panel.filter_changed.connect(self.on_filter_changed)
@@ -236,6 +238,23 @@ class RunnerViewerApp(QObject):
         )
         
         # Show the dialog
+        dialog.exec_()
+
+    def open_export_images_dialog(self) -> None:
+        """Open the export images dialog for batch image export."""
+        if not self.data_manager.data:
+            QMessageBox.information(
+                self.main_window,
+                "Nenhum Dados",
+                "Não há dados carregados para exportar imagens."
+            )
+            return
+
+        dialog = ExportImagesDialog(
+            self.data_manager.data,
+            self.config.get("base_path", ""),
+            self.main_window
+        )
         dialog.exec_()
 
     def export_csv(self) -> None:

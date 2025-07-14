@@ -26,6 +26,7 @@ class RunnerViewerMainWindow(QMainWindow):
     configuration_requested = pyqtSignal()
     export_requested = pyqtSignal()
     export_csv_requested = pyqtSignal()
+    export_images_requested = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -169,12 +170,17 @@ class RunnerViewerMainWindow(QMainWindow):
         export_action = QAction("📤 Exportar Dados", self)
         export_action.triggered.connect(lambda: self.export_requested.emit())
         export_action.setShortcut("Ctrl+E")
+
+        export_images_action = QAction("🖼️ Exportar Imagens", self)
+        export_images_action.triggered.connect(lambda: self.export_images_requested.emit())
+        export_images_action.setShortcut("Ctrl+Shift+E")
         
         tools_menu = self.menuBar().addMenu("Ferramentas")
         if tools_menu:
             tools_menu.addAction(config_action)
             tools_menu.addSeparator()
             tools_menu.addAction(export_action)
+            tools_menu.addAction(export_images_action)
     
     def setup_ui(self) -> None:
         """Setup the main user interface."""

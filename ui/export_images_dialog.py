@@ -2,7 +2,7 @@
 
 import os
 import random
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from PIL import Image
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -13,6 +13,79 @@ from PyQt5.QtWidgets import (
 )
 
 from utils.image_utils import load_image_cached, crop_image
+
+
+def _extract_bib_number(item: Dict[str, Any], runner: Dict[str, Any]) -> Optional[str]:
+    """Return the bib number for a runner or item."""
+    bib = runner.get("bib", {}) if runner else {}
+    text = bib.get("text")
+    if text:
+        return text
+    run_data = item.get("run_data", {})
+    if isinstance(run_data, dict):
+        return run_data.get("bib_number")
+    return None
+
+
+def filter_entries(
+    data: List[Dict[str, Any]],
+    category: Optional[List[str]],
+    gender: Optional[str],
+    bib_filter: str,
+    unique_person: bool,
+) -> List[Tuple[Dict[str, Any], int]]:
+    """Filter data and return a list of (item, runner_index) pairs."""
+    filtered_items: List[Dict[str, Any]] = []
+
+    for item in data:
+        if category:
+            item_category = item.get("run_category")
+            if "?" in category:
+                has_question_bib = False
+                run_data = item.get("run_data", {})
+                if isinstance(run_data, dict) and run_data.get("bib_number") == "?":
+                    has_question_bib = True
+                for runner in item.get("runners_found", []):
+                    bib_data = runner.get("bib", {})
+                    if isinstance(bib_data, dict) and bib_data.get("text") == "?":
+                        has_question_bib = True
+                        break
+                if not has_question_bib and item_category not in category:
+                    continue
+            elif item_category not in category:
+                continue
+
+        if gender and item.get("gender") != gender:
+            continue
+
+        has_bib = any(r.get("bib", {}).get("bbox") for r in item.get("runners_found", []))
+        if bib_filter == "Com bib" and not has_bib:
+            continue
+        if bib_filter == "Sem bib" and has_bib:
+            continue
+
+        filtered_items.append(item)
+
+    entries: List[Tuple[Dict[str, Any], int]] = []
+    for item in filtered_items:
+        for idx, _ in enumerate(item.get("runners_found", [])):
+            entries.append((item, idx))
+
+    if not unique_person:
+        return entries
+
+    unique_entries: List[Tuple[Dict[str, Any], int]] = []
+    seen_bibs = set()
+    for item, idx in entries:
+        runner = item.get("runners_found", [])[idx]
+        bib_number = _extract_bib_number(item, runner)
+        if bib_number and bib_number != "?":
+            if bib_number in seen_bibs:
+                continue
+            seen_bibs.add(bib_number)
+        unique_entries.append((item, idx))
+
+    return unique_entries
 
 
 class ExportImagesWorker(QThread):
@@ -56,85 +129,15 @@ class ExportImagesWorker(QThread):
         try:
             self.message.emit("Iniciando exportação de imagens...")
 
-            # Apply filters
-            filtered = []
-            for item in self.data:
-                # Check category filter
-                if self.category:
-                    item_category = item.get("run_category")
-                    
-                    # Special handling for "?" category - filter by bib_number
-                    if "?" in self.category:
-                        # If "?" is selected, include items where bib_number is "?" or category is "?"
-                        has_question_bib = False
-                        run_data = item.get("run_data", {})
-                        if isinstance(run_data, dict) and run_data.get("bib_number") == "?":
-                            has_question_bib = True
-                        
-                        # Also check if runners have bib detection with "?"
-                        for runner in item.get("runners_found", []):
-                            bib_data = runner.get("bib", {})
-                            if isinstance(bib_data, dict) and bib_data.get("text") == "?":
-                                has_question_bib = True
-                                break
-                        
-                        if has_question_bib:
-                            # This item qualifies for "?" category
-                            pass
-                        elif item_category not in self.category:
-                            # Check other selected categories
-                            continue
-                    else:
-                        # Normal category filtering
-                        if item_category not in self.category:
-                            continue
-                        
-                if self.gender and item.get("gender") != self.gender:
-                    continue
+            entries = filter_entries(
+                self.data,
+                self.category,
+                self.gender,
+                self.bib_filter,
+                self.unique_person,
+            )
 
-                has_bib = False
-                for runner in item.get("runners_found", []):
-                    chest = runner.get("bib")
-                    if chest and chest.get("bbox"):
-                        has_bib = True
-                        break
-                if self.bib_filter == "Com bib" and not has_bib:
-                    continue
-                if self.bib_filter == "Sem bib" and has_bib:
-                    continue
-
-                filtered.append(item)
-
-            # Apply unique person filter if enabled
-            if self.unique_person:
-                unique_filtered = []
-                seen_bib_numbers = set()
-                
-                for item in filtered:
-                    # Get bib_number from run_data or bib detection
-                    bib_number = None
-                    run_data = item.get("run_data", {})
-                    if isinstance(run_data, dict) and run_data.get("bib_number"):
-                        bib_number = run_data["bib_number"]
-                    else:
-                        # Try to get from bib detection
-                        for runner in item.get("runners_found", []):
-                            bib_data = runner.get("bib", {})
-                            if isinstance(bib_data, dict) and bib_data.get("text"):
-                                bib_number = bib_data["text"]
-                                break
-                    
-                    # Only add if we haven't seen this bib_number before
-                    if bib_number and bib_number != "?" and bib_number not in seen_bib_numbers:
-                        seen_bib_numbers.add(bib_number)
-                        unique_filtered.append(item)
-                    elif not bib_number or bib_number == "?":
-                        # Include items without bib_number or with '?' as unique entries
-                        unique_filtered.append(item)
-                
-                filtered = unique_filtered
-
-            total_available = len(filtered)
+            total_available = len(entries)
             
             # Se num_images for 0, exportar todos os disponíveis
             if self.num_images == 0:
@@ -148,11 +151,11 @@ class ExportImagesWorker(QThread):
                 return
 
             if self.selection_mode == "random" and count < total_available:
-                selected = random.sample(filtered, count)
+                selected = random.sample(entries, count)
             elif self.selection_mode == "proportional":
-                selected = self._select_proportional(filtered, count)
+                selected = self._select_proportional(entries, count)
             else:
-                selected = filtered[:count]
+                selected = entries[:count]
             total_sel = len(selected)
             self.message.emit(f"Total disponível após filtros: {total_available}")
             self.message.emit(f"Quantidade solicitada: {self.num_images}")
@@ -160,85 +163,85 @@ class ExportImagesWorker(QThread):
             self.message.emit(f"Exportando {total_sel} participantes selecionados...")
 
             participants_processed = 0
-            for idx, item in enumerate(selected):
+            for idx, (item, runner_index) in enumerate(selected):
                 participants_processed += 1
-                for runner_index, runner in enumerate(item.get("runners_found", [])):
-                    img_file = runner.get("image_path", "")
-                    if not img_file:
-                        continue
-                    img_src = os.path.join(self.base_path, img_file)
-                    if not os.path.exists(img_src):
-                        continue
+                runner = item.get("runners_found", [])[runner_index]
+                img_file = runner.get("image_path", "")
+                if not img_file:
+                    continue
+                img_src = os.path.join(self.base_path, img_file)
+                if not os.path.exists(img_src):
+                    continue
 
-                    # Full image
-                    if self.export_types.get("full", False):
-                        dest = os.path.join(self.output_path, "full_images")
+                # Full image
+                if self.export_types.get("full", False):
+                    dest = os.path.join(self.output_path, "full_images")
+                    os.makedirs(dest, exist_ok=True)
+                    from shutil import copy2
+
+                    dst_file = os.path.join(
+                        dest,
+                        f"full_{idx}_runner{runner_index}_{os.path.basename(img_file)}",
+                    )
+                    copy2(img_src, dst_file)
+                    self.total_exported += 1
+
+                # Person crop
+                if self.export_types.get("person", False):
+                    bbox = runner.get("person_bbox")
+                    if bbox and len(bbox) >= 4:
+                        img = load_image_cached(img_src)
+                        crop = crop_image(img, bbox)
+                        dest = os.path.join(self.output_path, "person_crops")
                         os.makedirs(dest, exist_ok=True)
-                        from shutil import copy2
-
                         dst_file = os.path.join(
                             dest,
-                            f"full_{idx}_runner{runner_index}_{os.path.basename(img_file)}"
+                            f"person_{idx}_runner{runner_index}_" +
+                            os.path.splitext(os.path.basename(img_file))[0] +
+                            ".jpg",
                         )
-                        copy2(img_src, dst_file)
+                        crop.save(dst_file, "JPEG", quality=95)
                         self.total_exported += 1
 
-                    # Person crop
-                    if self.export_types.get("person", False):
-                        bbox = runner.get("person_bbox")
+                # Bib crop
+                if self.export_types.get("bibs", False):
+                    chest = runner.get("bib")
+                    if chest:
+                        bbox = chest.get("bbox")
                         if bbox and len(bbox) >= 4:
                             img = load_image_cached(img_src)
                             crop = crop_image(img, bbox)
-                            dest = os.path.join(self.output_path, "person_crops")
+                            dest = os.path.join(self.output_path, "bib_crops")
                             os.makedirs(dest, exist_ok=True)
                             dst_file = os.path.join(
                                 dest,
-                                f"person_{idx}_runner{runner_index}_" +
+                                f"bib_{idx}_runner{runner_index}_" +
                                 os.path.splitext(os.path.basename(img_file))[0] +
                                 ".jpg"
                             )
                             crop.save(dst_file, "JPEG", quality=95)
                             self.total_exported += 1
 
-                    # Bib crop
-                    if self.export_types.get("bibs", False):
-                        chest = runner.get("bib")
-                        if chest:
-                            bbox = chest.get("bbox")
-                            if bbox and len(bbox) >= 4:
-                                img = load_image_cached(img_src)
-                                crop = crop_image(img, bbox)
-                                dest = os.path.join(self.output_path, "bib_crops")
-                                os.makedirs(dest, exist_ok=True)
-                                dst_file = os.path.join(
-                                    dest,
-                                    f"bib_{idx}_runner{runner_index}_" +
-                                    os.path.splitext(os.path.basename(img_file))[0] +
-                                    ".jpg"
-                                )
-                                crop.save(dst_file, "JPEG", quality=95)
-                                self.total_exported += 1
-
-                    # Shoes crop
-                    if self.export_types.get("shoes", False):
-                        for shoe_index, shoe in enumerate(runner.get("shoes", [])):
-                            conf = shoe.get("confidence", 0.0)
-                            if conf < self.min_conf or conf > self.max_conf:
-                                continue
-                            bbox = shoe.get("bbox")
-                            if bbox and len(bbox) >= 4:
-                                img = load_image_cached(img_src)
-                                crop = crop_image(img, bbox)
-                                dest = os.path.join(self.output_path, "shoe_crops")
-                                os.makedirs(dest, exist_ok=True)
-                                dst_file = os.path.join(
-                                    dest,
-                                    f"shoe_{idx}_runner{runner_index}_{shoe_index}_" +
-                                    os.path.splitext(os.path.basename(img_file))[0] +
-                                    ".jpg"
-                                )
-                                crop.save(dst_file, "JPEG", quality=95)
-                                self.total_exported += 1
+                # Shoes crop
+                if self.export_types.get("shoes", False):
+                    for shoe_index, shoe in enumerate(runner.get("shoes", [])):
+                        conf = shoe.get("confidence", 0.0)
+                        if conf < self.min_conf or conf > self.max_conf:
+                            continue
+                        bbox = shoe.get("bbox")
+                        if bbox and len(bbox) >= 4:
+                            img = load_image_cached(img_src)
+                            crop = crop_image(img, bbox)
+                            dest = os.path.join(self.output_path, "shoe_crops")
+                            os.makedirs(dest, exist_ok=True)
+                            dst_file = os.path.join(
+                                dest,
+                                f"shoe_{idx}_runner{runner_index}_{shoe_index}_" +
+                                os.path.splitext(os.path.basename(img_file))[0] +
+                                ".jpg"
+                            )
+                            crop.save(dst_file, "JPEG", quality=95)
+                            self.total_exported += 1
 
                 progress = int((idx + 1) * 100 / total_sel) if total_sel > 0 else 100
                 self.progress.emit(progress)
@@ -251,11 +254,13 @@ class ExportImagesWorker(QThread):
             self.message.emit(f"Erro durante exportação de imagens: {e}")
             self.finished.emit(self.total_exported)
 
-    def _select_proportional(self, items: List[Dict[str, Any]], count: int) -> List[Dict[str, Any]]:
-        """Select items proportionally by run_category."""
-        groups: Dict[str, List[Dict[str, Any]]] = {}
+    def _select_proportional(
+        self, items: List[Tuple[Dict[str, Any], int]], count: int
+    ) -> List[Tuple[Dict[str, Any], int]]:
+        """Select runner entries proportionally by run_category."""
+        groups: Dict[str, List[Tuple[Dict[str, Any], int]]] = {}
         for it in items:
-            cat = it.get("run_category") or "?"
+            cat = it[0].get("run_category") or "?"
             groups.setdefault(cat, []).append(it)
 
         categories = list(groups.keys())
@@ -265,7 +270,7 @@ class ExportImagesWorker(QThread):
 
         per_cat = count // num_categories
         remainder = count % num_categories
-        selected: List[Dict[str, Any]] = []
+        selected: List[Tuple[Dict[str, Any], int]] = []
 
         for idx, cat in enumerate(categories):
             limit = per_cat + (1 if idx < remainder else 0)
@@ -628,83 +633,14 @@ class ExportImagesDialog(QDialog):
         bib_filter = self.bib_cb.currentText()
         unique_person = self.unique_person_cb.isChecked()
         
-        filtered = []
-        for item in self.data:
-            # Check category filter
-            item_category = item.get("run_category")
-            
-            # Special handling for "?" category - filter by bib_number
-            if "?" in selected_categories:
-                # If "?" is selected, include items where bib_number is "?" or category is "?"
-                has_question_bib = False
-                run_data = item.get("run_data", {})
-                if isinstance(run_data, dict) and run_data.get("bib_number") == "?":
-                    has_question_bib = True
-                
-                # Also check if runners have bib detection with "?"
-                for runner in item.get("runners_found", []):
-                    bib_data = runner.get("bib", {})
-                    if isinstance(bib_data, dict) and bib_data.get("text") == "?":
-                        has_question_bib = True
-                        break
-                
-                if has_question_bib:
-                    # This item qualifies for "?" category
-                    pass
-                elif selected_categories and item_category not in selected_categories:
-                    # Check other selected categories
-                    continue
-            else:
-                # Normal category filtering
-                if selected_categories and item_category not in selected_categories:
-                    continue
-                
-            if gender and item.get("gender") != gender:
-                continue
-
-            has_bib = False
-            for runner in item.get("runners_found", []):
-                chest = runner.get("bib")
-                if chest and chest.get("bbox"):
-                    has_bib = True
-                    break
-            if bib_filter == "Com bib" and not has_bib:
-                continue
-            if bib_filter == "Sem bib" and has_bib:
-                continue
-
-            filtered.append(item)
-        
-        # Apply unique person filter if enabled
-        if unique_person:
-            unique_filtered = []
-            seen_bib_numbers = set()
-            
-            for item in filtered:
-                # Get bib_number from run_data or bib detection
-                bib_number = None
-                run_data = item.get("run_data", {})
-                if isinstance(run_data, dict) and run_data.get("bib_number"):
-                    bib_number = run_data["bib_number"]
-                else:
-                    # Try to get from bib detection
-                    for runner in item.get("runners_found", []):
-                        bib_data = runner.get("bib", {})
-                        if isinstance(bib_data, dict) and bib_data.get("text"):
-                            bib_number = bib_data["text"]
-                            break
-                
-                # Only add if we haven't seen this bib_number before
-                if bib_number and bib_number != "?" and bib_number not in seen_bib_numbers:
-                    seen_bib_numbers.add(bib_number)
-                    unique_filtered.append(item)
-                elif not bib_number or bib_number == "?":
-                    # Include items without bib_number or with '?' as unique entries
-                    unique_filtered.append(item)
-            
-            filtered = unique_filtered
-        
-        return len(filtered)
+        entries = filter_entries(
+            self.data,
+            list(selected_categories) if selected_categories else None,
+            gender,
+            bib_filter,
+            unique_person,
+        )
+        return len(entries)
 
     def _update_quantity_limits(self):
         """Update the quantity spinner limits based on current filters."""

@@ -28,7 +28,7 @@ class ExportImagesWorker(QThread):
         base_path: str,
         output_path: str,
         num_images: int,
-        randomize: bool,
+        selection_mode: str,
         category: Optional[List[str]],
         gender: Optional[str],
         bib_filter: str,
@@ -42,7 +42,7 @@ class ExportImagesWorker(QThread):
         self.base_path = base_path
         self.output_path = output_path
         self.num_images = num_images
-        self.randomize = randomize
+        self.selection_mode = selection_mode
         self.category = category
         self.gender = gender
         self.bib_filter = bib_filter
@@ -125,11 +125,11 @@ class ExportImagesWorker(QThread):
                                 break
                     
                     # Only add if we haven't seen this bib_number before
-                    if bib_number and bib_number not in seen_bib_numbers:
+                    if bib_number and bib_number != "?" and bib_number not in seen_bib_numbers:
                         seen_bib_numbers.add(bib_number)
                         unique_filtered.append(item)
-                    elif not bib_number:
-                        # Include items without bib_number (they're unique by default)
+                    elif not bib_number or bib_number == "?":
+                        # Include items without bib_number or with '?' as unique entries
                         unique_filtered.append(item)
                 
                 filtered = unique_filtered
@@ -147,8 +147,10 @@ class ExportImagesWorker(QThread):
                 self.finished.emit(0)
                 return
 
-            if self.randomize and count < total_available:
+            if self.selection_mode == "random" and count < total_available:
                 selected = random.sample(filtered, count)
+            elif self.selection_mode == "proportional":
+                selected = self._select_proportional(filtered, count)
             else:
                 selected = filtered[:count]
             total_sel = len(selected)
@@ -249,6 +251,30 @@ class ExportImagesWorker(QThread):
             self.message.emit(f"Erro durante exportação de imagens: {e}")
             self.finished.emit(self.total_exported)
 
+    def _select_proportional(self, items: List[Dict[str, Any]], count: int) -> List[Dict[str, Any]]:
+        """Select items proportionally by run_category."""
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for it in items:
+            cat = it.get("run_category") or "?"
+            groups.setdefault(cat, []).append(it)
+
+        categories = list(groups.keys())
+        num_categories = len(categories)
+        if num_categories == 0:
+            return []
+
+        per_cat = count // num_categories
+        remainder = count % num_categories
+        selected: List[Dict[str, Any]] = []
+
+        for idx, cat in enumerate(categories):
+            limit = per_cat + (1 if idx < remainder else 0)
+            items_cat = groups[cat]
+            random.shuffle(items_cat)
+            selected.extend(items_cat[: min(limit, len(items_cat))])
+
+        return selected[:count]
+
 
 class ExportImagesDialog(QDialog):
     """Dialog for configuring and exporting images."""
@@ -299,9 +325,11 @@ class ExportImagesDialog(QDialog):
         mode_layout = QHBoxLayout(mode_group)
         self.seq_rb = QRadioButton("Sequencial")
         self.rand_rb = QRadioButton("Aleatório")
+        self.prop_rb = QRadioButton("Proporcional")
         self.seq_rb.setChecked(True)
         mode_layout.addWidget(self.seq_rb)
         mode_layout.addWidget(self.rand_rb)
+        mode_layout.addWidget(self.prop_rb)
         top_layout.addWidget(mode_group)
         
         layout.addLayout(top_layout)
@@ -435,7 +463,7 @@ class ExportImagesDialog(QDialog):
     def _connect_signals(self):
         self.output_path_btn.clicked.connect(self._select_output_path)
         widgets = [
-            self.qty_spin, self.seq_rb, self.rand_rb, self.category_all_cb,
+            self.qty_spin, self.seq_rb, self.rand_rb, self.prop_rb, self.category_all_cb,
             self.gender_cb, self.bib_cb, self.min_slider, self.max_slider,
             self.shoes_cb, self.bibs_cb, self.person_cb, self.full_cb,
             self.unique_person_cb
@@ -507,7 +535,12 @@ class ExportImagesDialog(QDialog):
             QMessageBox.warning(self, "Aviso", "Selecione um diretório de saída.")
             return
         num = self.qty_spin.value()
-        rand = self.rand_rb.isChecked()
+        if self.seq_rb.isChecked():
+            mode = "sequential"
+        elif self.rand_rb.isChecked():
+            mode = "random"
+        else:
+            mode = "proportional"
         
         # Get selected categories
         selected_categories = []
@@ -544,7 +577,7 @@ class ExportImagesDialog(QDialog):
             self.base_path,
             out,
             num,
-            rand,
+            mode,
             cat,
             gen,
             bibf,
@@ -662,11 +695,11 @@ class ExportImagesDialog(QDialog):
                             break
                 
                 # Only add if we haven't seen this bib_number before
-                if bib_number and bib_number not in seen_bib_numbers:
+                if bib_number and bib_number != "?" and bib_number not in seen_bib_numbers:
                     seen_bib_numbers.add(bib_number)
                     unique_filtered.append(item)
-                elif not bib_number:
-                    # Include items without bib_number (they're unique by default)
+                elif not bib_number or bib_number == "?":
+                    # Include items without bib_number or with '?' as unique entries
                     unique_filtered.append(item)
             
             filtered = unique_filtered

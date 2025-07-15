@@ -76,17 +76,31 @@ class ExportImagesWorker(QThread):
                 filtered.append(item)
 
             total_available = len(filtered)
-            count = self.num_images if self.num_images > 0 else total_available
-            count = min(count, total_available)
+            
+            # Se num_images for 0, exportar todos os disponíveis
+            if self.num_images == 0:
+                count = total_available
+            else:
+                count = min(self.num_images, total_available)
 
-            if self.randomize:
+            if count == 0:
+                self.message.emit("Nenhuma imagem disponível para exportação após aplicar filtros.")
+                self.finished.emit(0)
+                return
+
+            if self.randomize and count < total_available:
                 selected = random.sample(filtered, count)
             else:
                 selected = filtered[:count]
             total_sel = len(selected)
+            self.message.emit(f"Total disponível após filtros: {total_available}")
+            self.message.emit(f"Quantidade solicitada: {self.num_images}")
+            self.message.emit(f"Quantidade a exportar: {count}")
             self.message.emit(f"Exportando {total_sel} participantes selecionados...")
 
+            participants_processed = 0
             for idx, item in enumerate(selected):
+                participants_processed += 1
                 for runner_index, runner in enumerate(item.get("runners_found", [])):
                     img_file = runner.get("image_path", "")
                     if not img_file:
@@ -169,7 +183,7 @@ class ExportImagesWorker(QThread):
                 self.progress.emit(progress)
 
             self.message.emit(
-                f"Exportação concluída! {self.total_exported} arquivos exportados."
+                f"Exportação concluída! {participants_processed} participantes processados, {self.total_exported} arquivos exportados."
             )
             self.finished.emit(self.total_exported)
         except Exception as e:
@@ -197,6 +211,9 @@ class ExportImagesDialog(QDialog):
 
         self._setup_ui()
         self._connect_signals()
+        
+        # Initial quantity update based on no filters
+        self._update_quantity_limits()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -209,8 +226,10 @@ class ExportImagesDialog(QDialog):
         self.qty_spin = QSpinBox()
         self.qty_spin.setRange(0, total)
         self.qty_spin.setValue(total)
+        self.qty_spin.setSpecialValueText("Todas")  # Mostrar "Todas" quando for 0
         qty_layout.addWidget(self.qty_spin)
-        qty_layout.addWidget(QLabel(f"/ {total}"))
+        self.qty_total_label = QLabel(f"/ {total}")
+        qty_layout.addWidget(self.qty_total_label)
         layout.addWidget(qty_group)
 
         # Selection mode
@@ -326,6 +345,11 @@ class ExportImagesDialog(QDialog):
                 w.currentIndexChanged.connect(self._check_export_ready)
         self.output_path_btn.clicked.connect(self._check_export_ready)
 
+        # Connect filter changes to quantity update
+        self.category_cb.currentIndexChanged.connect(self._update_quantity_limits)
+        self.gender_cb.currentIndexChanged.connect(self._update_quantity_limits)
+        self.bib_cb.currentIndexChanged.connect(self._update_quantity_limits)
+
         self.min_slider.valueChanged.connect(
             lambda v: self.min_label.setText(f"{v/100:.2f}"))
         self.max_slider.valueChanged.connect(
@@ -427,3 +451,47 @@ class ExportImagesDialog(QDialog):
                 "Exportação",
                 "Nenhum arquivo foi exportado. Verifique os filtros e configurações."
             )
+
+    def _get_filtered_count(self) -> int:
+        """Calculate the number of items available after applying current filters."""
+        category = self.category_cb.currentText()
+        category = None if category.startswith("Todas") else category
+        gender = self.gender_cb.currentText()
+        gender = None if gender.startswith("Todos") else gender
+        bib_filter = self.bib_cb.currentText()
+        
+        filtered_count = 0
+        for item in self.data:
+            if category and item.get("run_category") != category:
+                continue
+            if gender and item.get("gender") != gender:
+                continue
+
+            has_bib = False
+            for runner in item.get("runners_found", []):
+                chest = runner.get("bib")
+                if chest and chest.get("bbox"):
+                    has_bib = True
+                    break
+            if bib_filter == "Com bib" and not has_bib:
+                continue
+            if bib_filter == "Sem bib" and has_bib:
+                continue
+
+            filtered_count += 1
+        
+        return filtered_count
+
+    def _update_quantity_limits(self):
+        """Update the quantity spinner limits based on current filters."""
+        filtered_count = self._get_filtered_count()
+        
+        # Update spinner range
+        self.qty_spin.setRange(0, filtered_count)
+        
+        # Update total label
+        self.qty_total_label.setText(f"/ {filtered_count}")
+        
+        # If current value is higher than available, set to max available
+        if self.qty_spin.value() > filtered_count:
+            self.qty_spin.setValue(filtered_count)

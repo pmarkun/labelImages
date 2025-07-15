@@ -29,12 +29,13 @@ class ExportImagesWorker(QThread):
         output_path: str,
         num_images: int,
         randomize: bool,
-        category: Optional[str],
+        category: Optional[List[str]],
         gender: Optional[str],
         bib_filter: str,
         min_conf: float,
         max_conf: float,
-        export_types: Dict[str, bool]
+        export_types: Dict[str, bool],
+        unique_person: bool = False
     ):
         super().__init__()
         self.data = data
@@ -48,6 +49,7 @@ class ExportImagesWorker(QThread):
         self.min_conf = min_conf
         self.max_conf = max_conf
         self.export_types = export_types
+        self.unique_person = unique_person
         self.total_exported = 0
 
     def run(self):
@@ -57,8 +59,12 @@ class ExportImagesWorker(QThread):
             # Apply filters
             filtered = []
             for item in self.data:
-                if self.category and item.get("run_category") != self.category:
-                    continue
+                # Check category filter
+                if self.category:
+                    item_category = item.get("run_category")
+                    if item_category not in self.category:
+                        continue
+                        
                 if self.gender and item.get("gender") != self.gender:
                     continue
 
@@ -74,6 +80,35 @@ class ExportImagesWorker(QThread):
                     continue
 
                 filtered.append(item)
+
+            # Apply unique person filter if enabled
+            if self.unique_person:
+                unique_filtered = []
+                seen_bib_numbers = set()
+                
+                for item in filtered:
+                    # Get bib_number from run_data or bib detection
+                    bib_number = None
+                    run_data = item.get("run_data", {})
+                    if isinstance(run_data, dict) and run_data.get("bib_number"):
+                        bib_number = run_data["bib_number"]
+                    else:
+                        # Try to get from bib detection
+                        for runner in item.get("runners_found", []):
+                            bib_data = runner.get("bib", {})
+                            if isinstance(bib_data, dict) and bib_data.get("text"):
+                                bib_number = bib_data["text"]
+                                break
+                    
+                    # Only add if we haven't seen this bib_number before
+                    if bib_number and bib_number not in seen_bib_numbers:
+                        seen_bib_numbers.add(bib_number)
+                        unique_filtered.append(item)
+                    elif not bib_number:
+                        # Include items without bib_number (they're unique by default)
+                        unique_filtered.append(item)
+                
+                filtered = unique_filtered
 
             total_available = len(filtered)
             
@@ -245,13 +280,29 @@ class ExportImagesDialog(QDialog):
         # Filters
         filt_group = QGroupBox("Filtros")
         filt_layout = QGridLayout(filt_group)
-        filt_layout.addWidget(QLabel("Categoria:"), 0, 0)
-        self.category_cb = QComboBox()
-        self.category_cb.addItem("Todas as categorias")
+        
+        # Category checkboxes
+        filt_layout.addWidget(QLabel("Categorias:"), 0, 0)
+        category_widget = QGroupBox()
+        category_layout = QVBoxLayout(category_widget)
+        category_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Add "Select All" checkbox
+        self.category_all_cb = QCheckBox("Todas as categorias")
+        self.category_all_cb.setChecked(True)
+        category_layout.addWidget(self.category_all_cb)
+        
+        # Add individual category checkboxes
+        self.category_checkboxes = {}
         cats = sorted({p.get("run_category") for p in self.data if p.get("run_category")})
         for c in cats:
-            self.category_cb.addItem(c)
-        filt_layout.addWidget(self.category_cb, 0, 1)
+            if c:  # Only add non-empty categories
+                cb = QCheckBox(c)
+                cb.setChecked(True)
+                self.category_checkboxes[c] = cb
+                category_layout.addWidget(cb)
+        
+        filt_layout.addWidget(category_widget, 0, 1)
 
         filt_layout.addWidget(QLabel("Gênero:"), 1, 0)
         self.gender_cb = QComboBox()
@@ -265,6 +316,12 @@ class ExportImagesDialog(QDialog):
         self.bib_cb = QComboBox()
         self.bib_cb.addItems(["Todos", "Com bib", "Sem bib"])
         filt_layout.addWidget(self.bib_cb, 2, 1)
+        
+        # Unique person filter
+        filt_layout.addWidget(QLabel("Pessoa única:"), 3, 0)
+        self.unique_person_cb = QCheckBox("Apenas uma imagem por bib_number")
+        filt_layout.addWidget(self.unique_person_cb, 3, 1)
+        
         layout.addWidget(filt_group)
 
         # Confidence thresholds
@@ -332,10 +389,13 @@ class ExportImagesDialog(QDialog):
     def _connect_signals(self):
         self.output_path_btn.clicked.connect(self._select_output_path)
         widgets = [
-            self.qty_spin, self.seq_rb, self.rand_rb, self.category_cb,
+            self.qty_spin, self.seq_rb, self.rand_rb, self.category_all_cb,
             self.gender_cb, self.bib_cb, self.min_slider, self.max_slider,
-            self.shoes_cb, self.bibs_cb, self.person_cb, self.full_cb
+            self.shoes_cb, self.bibs_cb, self.person_cb, self.full_cb,
+            self.unique_person_cb
         ]
+        # Add category checkboxes to widgets list
+        widgets.extend(self.category_checkboxes.values())
         for w in widgets:
             if hasattr(w, 'stateChanged'):
                 w.stateChanged.connect(self._check_export_ready)
@@ -346,9 +406,12 @@ class ExportImagesDialog(QDialog):
         self.output_path_btn.clicked.connect(self._check_export_ready)
 
         # Connect filter changes to quantity update
-        self.category_cb.currentIndexChanged.connect(self._update_quantity_limits)
+        self.category_all_cb.stateChanged.connect(self._on_category_all_changed)
+        for cb in self.category_checkboxes.values():
+            cb.stateChanged.connect(self._on_category_individual_changed)
         self.gender_cb.currentIndexChanged.connect(self._update_quantity_limits)
         self.bib_cb.currentIndexChanged.connect(self._update_quantity_limits)
+        self.unique_person_cb.stateChanged.connect(self._update_quantity_limits)
 
         self.min_slider.valueChanged.connect(
             lambda v: self.min_label.setText(f"{v/100:.2f}"))
@@ -359,6 +422,11 @@ class ExportImagesDialog(QDialog):
 
         self.export_btn.clicked.connect(self._start_export)
         self.cancel_btn.clicked.connect(self.reject)
+
+        # Connect category checkbox signals
+        self.category_all_cb.stateChanged.connect(self._on_category_all_changed)
+        for cb in self.category_checkboxes.values():
+            cb.stateChanged.connect(self._on_category_individual_changed)
 
     def _sync_sliders(self, v):
         if self.min_slider.value() > self.max_slider.value():
@@ -394,13 +462,23 @@ class ExportImagesDialog(QDialog):
             return
         num = self.qty_spin.value()
         rand = self.rand_rb.isChecked()
-        cat = self.category_cb.currentText()
-        cat = None if cat.startswith("Todas") else cat
+        
+        # Get selected categories
+        selected_categories = []
+        if not self.category_all_cb.isChecked():
+            # Get only checked categories
+            for category, cb in self.category_checkboxes.items():
+                if cb.isChecked():
+                    selected_categories.append(category)
+        # If all categories or no specific selection, pass None (means all)
+        cat = selected_categories if selected_categories else None
+        
         gen = self.gender_cb.currentText()
         gen = None if gen.startswith("Todos") else gen
         bibf = self.bib_cb.currentText()
         minc = self.min_slider.value() / 100.0
         maxc = self.max_slider.value() / 100.0
+        unique_person = self.unique_person_cb.isChecked()
         types = {
             "shoes": self.shoes_cb.isChecked(),
             "bibs": self.bibs_cb.isChecked(),
@@ -426,7 +504,8 @@ class ExportImagesDialog(QDialog):
             bibf,
             minc,
             maxc,
-            types
+            types,
+            unique_person
         )
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.message.connect(self._add_status_message)
@@ -454,16 +533,29 @@ class ExportImagesDialog(QDialog):
 
     def _get_filtered_count(self) -> int:
         """Calculate the number of items available after applying current filters."""
-        category = self.category_cb.currentText()
-        category = None if category.startswith("Todas") else category
+        # Get selected categories
+        selected_categories = set()
+        if self.category_all_cb.isChecked():
+            # If "all" is checked, include all categories
+            selected_categories = {c for c in self.category_checkboxes.keys()}
+        else:
+            # Get only checked categories
+            for category, cb in self.category_checkboxes.items():
+                if cb.isChecked():
+                    selected_categories.add(category)
+        
         gender = self.gender_cb.currentText()
         gender = None if gender.startswith("Todos") else gender
         bib_filter = self.bib_cb.currentText()
+        unique_person = self.unique_person_cb.isChecked()
         
-        filtered_count = 0
+        filtered = []
         for item in self.data:
-            if category and item.get("run_category") != category:
+            # Check category filter
+            item_category = item.get("run_category")
+            if selected_categories and item_category not in selected_categories:
                 continue
+                
             if gender and item.get("gender") != gender:
                 continue
 
@@ -478,9 +570,38 @@ class ExportImagesDialog(QDialog):
             if bib_filter == "Sem bib" and has_bib:
                 continue
 
-            filtered_count += 1
+            filtered.append(item)
         
-        return filtered_count
+        # Apply unique person filter if enabled
+        if unique_person:
+            unique_filtered = []
+            seen_bib_numbers = set()
+            
+            for item in filtered:
+                # Get bib_number from run_data or bib detection
+                bib_number = None
+                run_data = item.get("run_data", {})
+                if isinstance(run_data, dict) and run_data.get("bib_number"):
+                    bib_number = run_data["bib_number"]
+                else:
+                    # Try to get from bib detection
+                    for runner in item.get("runners_found", []):
+                        bib_data = runner.get("bib", {})
+                        if isinstance(bib_data, dict) and bib_data.get("text"):
+                            bib_number = bib_data["text"]
+                            break
+                
+                # Only add if we haven't seen this bib_number before
+                if bib_number and bib_number not in seen_bib_numbers:
+                    seen_bib_numbers.add(bib_number)
+                    unique_filtered.append(item)
+                elif not bib_number:
+                    # Include items without bib_number (they're unique by default)
+                    unique_filtered.append(item)
+            
+            filtered = unique_filtered
+        
+        return len(filtered)
 
     def _update_quantity_limits(self):
         """Update the quantity spinner limits based on current filters."""
@@ -495,3 +616,21 @@ class ExportImagesDialog(QDialog):
         # If current value is higher than available, set to max available
         if self.qty_spin.value() > filtered_count:
             self.qty_spin.setValue(filtered_count)
+
+    def _on_category_all_changed(self, checked: bool):
+        """Handle 'Select All' category checkbox change."""
+        for cb in self.category_checkboxes.values():
+            cb.setChecked(checked)
+        self._update_quantity_limits()
+
+    def _on_category_individual_changed(self):
+        """Handle individual category checkbox change."""
+        # Check if all individual checkboxes are checked
+        all_checked = all(cb.isChecked() for cb in self.category_checkboxes.values())
+        
+        # Update "Select All" checkbox state without triggering its signal
+        self.category_all_cb.blockSignals(True)
+        self.category_all_cb.setChecked(all_checked)
+        self.category_all_cb.blockSignals(False)
+        
+        self._update_quantity_limits()

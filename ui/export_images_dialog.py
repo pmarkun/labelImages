@@ -9,7 +9,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QCheckBox, QSlider, QGroupBox, QProgressBar, QTextEdit, QFileDialog,
-    QMessageBox, QComboBox, QSpinBox, QRadioButton
+    QMessageBox, QComboBox, QSpinBox, QRadioButton, QScrollArea, QWidget
 )
 
 from utils.image_utils import load_image_cached, crop_image
@@ -62,8 +62,32 @@ class ExportImagesWorker(QThread):
                 # Check category filter
                 if self.category:
                     item_category = item.get("run_category")
-                    if item_category not in self.category:
-                        continue
+                    
+                    # Special handling for "?" category - filter by bib_number
+                    if "?" in self.category:
+                        # If "?" is selected, include items where bib_number is "?" or category is "?"
+                        has_question_bib = False
+                        run_data = item.get("run_data", {})
+                        if isinstance(run_data, dict) and run_data.get("bib_number") == "?":
+                            has_question_bib = True
+                        
+                        # Also check if runners have bib detection with "?"
+                        for runner in item.get("runners_found", []):
+                            bib_data = runner.get("bib", {})
+                            if isinstance(bib_data, dict) and bib_data.get("text") == "?":
+                                has_question_bib = True
+                                break
+                        
+                        if has_question_bib:
+                            # This item qualifies for "?" category
+                            pass
+                        elif item_category not in self.category:
+                            # Check other selected categories
+                            continue
+                    else:
+                        # Normal category filtering
+                        if item_category not in self.category:
+                            continue
                         
                 if self.gender and item.get("gender") != self.gender:
                     continue
@@ -242,7 +266,7 @@ class ExportImagesDialog(QDialog):
 
         self.setWindowTitle("Exportar Imagens")
         self.setModal(True)
-        self.resize(500, 700)
+        self.resize(600, 800)  # Increased width, reasonable height
 
         self._setup_ui()
         self._connect_signals()
@@ -253,6 +277,9 @@ class ExportImagesDialog(QDialog):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
 
+        # Top section - quantity and mode in one row
+        top_layout = QHBoxLayout()
+        
         # Quantity
         qty_group = QGroupBox("Quantidade de Imagens")
         qty_layout = QHBoxLayout(qty_group)
@@ -265,7 +292,7 @@ class ExportImagesDialog(QDialog):
         qty_layout.addWidget(self.qty_spin)
         self.qty_total_label = QLabel(f"/ {total}")
         qty_layout.addWidget(self.qty_total_label)
-        layout.addWidget(qty_group)
+        top_layout.addWidget(qty_group)
 
         # Selection mode
         mode_group = QGroupBox("Modo de Seleção")
@@ -275,17 +302,29 @@ class ExportImagesDialog(QDialog):
         self.seq_rb.setChecked(True)
         mode_layout.addWidget(self.seq_rb)
         mode_layout.addWidget(self.rand_rb)
-        layout.addWidget(mode_group)
-
-        # Filters
-        filt_group = QGroupBox("Filtros")
-        filt_layout = QGridLayout(filt_group)
+        top_layout.addWidget(mode_group)
         
-        # Category checkboxes
-        filt_layout.addWidget(QLabel("Categorias:"), 0, 0)
-        category_widget = QGroupBox()
+        layout.addLayout(top_layout)
+
+        # Filters section - use two columns
+        filters_layout = QHBoxLayout()
+        
+        # Left column filters
+        left_filters = QGroupBox("Filtros")
+        left_layout = QGridLayout(left_filters)
+        
+        # Category checkboxes with scroll
+        left_layout.addWidget(QLabel("Categorias:"), 0, 0)
+        
+        # Create scrollable area for categories
+        category_scroll = QScrollArea()
+        category_scroll.setMaximumHeight(120)  # Limit height
+        category_scroll.setWidgetResizable(True)
+        
+        category_widget = QWidget()
         category_layout = QVBoxLayout(category_widget)
-        category_layout.setContentsMargins(0, 0, 0, 0)
+        category_layout.setContentsMargins(5, 5, 5, 5)
+        category_layout.setSpacing(2)  # Reduce spacing
         
         # Add "Select All" checkbox
         self.category_all_cb = QCheckBox("Todas as categorias")
@@ -294,41 +333,45 @@ class ExportImagesDialog(QDialog):
         
         # Add individual category checkboxes
         self.category_checkboxes = {}
-        cats = sorted({p.get("run_category") for p in self.data if p.get("run_category")})
+        cats = sorted([c for c in {p.get("run_category") for p in self.data if p.get("run_category")} if c])
         for c in cats:
-            if c:  # Only add non-empty categories
-                cb = QCheckBox(c)
-                cb.setChecked(True)
-                self.category_checkboxes[c] = cb
-                category_layout.addWidget(cb)
+            cb = QCheckBox(c)
+            cb.setChecked(True)
+            self.category_checkboxes[c] = cb
+            category_layout.addWidget(cb)
         
-        filt_layout.addWidget(category_widget, 0, 1)
+        category_scroll.setWidget(category_widget)
+        left_layout.addWidget(category_scroll, 0, 1)
 
-        filt_layout.addWidget(QLabel("Gênero:"), 1, 0)
+        left_layout.addWidget(QLabel("Gênero:"), 1, 0)
         self.gender_cb = QComboBox()
         self.gender_cb.addItem("Todos os gêneros")
-        gens = sorted({p.get("gender") for p in self.data if p.get("gender")})
+        gens = sorted([g for g in {p.get("gender") for p in self.data if p.get("gender")} if g])
         for g in gens:
             self.gender_cb.addItem(g)
-        filt_layout.addWidget(self.gender_cb, 1, 1)
+        left_layout.addWidget(self.gender_cb, 1, 1)
 
-        filt_layout.addWidget(QLabel("Bib detectado:"), 2, 0)
+        left_layout.addWidget(QLabel("Bib detectado:"), 2, 0)
         self.bib_cb = QComboBox()
         self.bib_cb.addItems(["Todos", "Com bib", "Sem bib"])
-        filt_layout.addWidget(self.bib_cb, 2, 1)
+        left_layout.addWidget(self.bib_cb, 2, 1)
         
         # Unique person filter
-        filt_layout.addWidget(QLabel("Pessoa única:"), 3, 0)
-        self.unique_person_cb = QCheckBox("Apenas uma imagem por bib_number")
-        filt_layout.addWidget(self.unique_person_cb, 3, 1)
+        left_layout.addWidget(QLabel("Pessoa única:"), 3, 0)
+        self.unique_person_cb = QCheckBox("Apenas uma por bib_number")
+        left_layout.addWidget(self.unique_person_cb, 3, 1)
         
-        layout.addWidget(filt_group)
+        filters_layout.addWidget(left_filters)
 
+        # Right column - confidence and export types
+        right_filters = QGroupBox("Configurações")
+        right_layout = QVBoxLayout(right_filters)
+        
         # Confidence thresholds
         conf_group = QGroupBox("Limites de Confiança para Tênis")
         conf_layout = QGridLayout(conf_group)
         conf_layout.addWidget(QLabel("Mínimo:"), 0, 0)
-        self.min_slider = QSlider(Qt.Horizontal)
+        self.min_slider = QSlider()
         self.min_slider.setRange(0, 100)
         self.min_slider.setValue(0)
         self.min_label = QLabel("0.00")
@@ -336,13 +379,13 @@ class ExportImagesDialog(QDialog):
         conf_layout.addWidget(self.min_label, 0, 2)
 
         conf_layout.addWidget(QLabel("Máximo:"), 1, 0)
-        self.max_slider = QSlider(Qt.Horizontal)
+        self.max_slider = QSlider()
         self.max_slider.setRange(0, 100)
         self.max_slider.setValue(100)
         self.max_label = QLabel("1.00")
         conf_layout.addWidget(self.max_slider, 1, 1)
         conf_layout.addWidget(self.max_label, 1, 2)
-        layout.addWidget(conf_group)
+        right_layout.addWidget(conf_group)
 
         # Export types
         type_group = QGroupBox("Tipos de Exportação")
@@ -353,7 +396,10 @@ class ExportImagesDialog(QDialog):
         self.full_cb = QCheckBox("Imagem Completa")
         for cb in [self.shoes_cb, self.bibs_cb, self.person_cb, self.full_cb]:
             type_layout.addWidget(cb)
-        layout.addWidget(type_group)
+        right_layout.addWidget(type_group)
+        
+        filters_layout.addWidget(right_filters)
+        layout.addLayout(filters_layout)
 
         # Output directory
         out_group = QGroupBox("Diretório de Saída")
@@ -371,7 +417,7 @@ class ExportImagesDialog(QDialog):
         self.progress_bar.setVisible(False)
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
-        self.status_text.setMaximumHeight(100)
+        self.status_text.setMaximumHeight(80)  # Smaller height
         prog_layout.addWidget(self.progress_bar)
         prog_layout.addWidget(self.status_text)
         layout.addWidget(prog_group)
@@ -553,8 +599,32 @@ class ExportImagesDialog(QDialog):
         for item in self.data:
             # Check category filter
             item_category = item.get("run_category")
-            if selected_categories and item_category not in selected_categories:
-                continue
+            
+            # Special handling for "?" category - filter by bib_number
+            if "?" in selected_categories:
+                # If "?" is selected, include items where bib_number is "?" or category is "?"
+                has_question_bib = False
+                run_data = item.get("run_data", {})
+                if isinstance(run_data, dict) and run_data.get("bib_number") == "?":
+                    has_question_bib = True
+                
+                # Also check if runners have bib detection with "?"
+                for runner in item.get("runners_found", []):
+                    bib_data = runner.get("bib", {})
+                    if isinstance(bib_data, dict) and bib_data.get("text") == "?":
+                        has_question_bib = True
+                        break
+                
+                if has_question_bib:
+                    # This item qualifies for "?" category
+                    pass
+                elif selected_categories and item_category not in selected_categories:
+                    # Check other selected categories
+                    continue
+            else:
+                # Normal category filtering
+                if selected_categories and item_category not in selected_categories:
+                    continue
                 
             if gender and item.get("gender") != gender:
                 continue

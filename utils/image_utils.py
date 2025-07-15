@@ -4,7 +4,7 @@ Image processing utilities.
 import io
 import hashlib
 from functools import lru_cache
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont
 from PyQt5.QtGui import QPixmap
 
@@ -20,14 +20,14 @@ def clear_image_cache():
     _image_cache.clear()
     _processed_image_cache.clear()
 
-def get_cache_key(img_path: str, modification_time: float = None) -> str:
+def get_cache_key(img_path: str, modification_time: Optional[float] = None) -> str:
     """Generate a cache key for an image."""
     if modification_time is not None:
         return f"{img_path}_{modification_time}"
     return img_path
 
 def load_image_cached(img_path: str) -> Image.Image:
-    """Load an image with caching."""
+    """Load an image with caching and EXIF orientation correction."""
     global _image_cache
     
     try:
@@ -39,6 +39,9 @@ def load_image_cached(img_path: str) -> Image.Image:
             return _image_cache[cache_key]
         
         img = Image.open(img_path)
+        # Apply EXIF orientation correction
+        img = correct_exif(img)
+        
         # Keep cache size reasonable
         if len(_image_cache) > 50:
             # Remove oldest entries
@@ -49,7 +52,9 @@ def load_image_cached(img_path: str) -> Image.Image:
         _image_cache[cache_key] = img
         return img
     except Exception:
-        return Image.open(img_path)  # Fallback without cache
+        # Fallback without cache
+        img = Image.open(img_path)
+        return correct_exif(img)
 
 def crop_image(img: Image.Image, box: List[int]) -> Image.Image:
     """Crop an image using the provided bounding box."""
@@ -132,3 +137,20 @@ def pil_to_qpixmap(pil_image: Image.Image) -> QPixmap:
     pixmap = QPixmap()
     pixmap.loadFromData(byte_array.getvalue())
     return pixmap
+
+def correct_exif(img: Image.Image) -> Image.Image:
+    """Corrects the orientation of an image based on its EXIF data."""
+    try:
+        exif = img.getexif()
+        if exif is not None:
+            orientation = exif.get(274)  # 274 is the EXIF tag for orientation
+            if orientation == 3:
+                img = img.rotate(180, expand=True)
+            elif orientation == 6:
+                img = img.rotate(270, expand=True)
+            elif orientation == 8:
+                img = img.rotate(90, expand=True)
+    except (AttributeError, KeyError, TypeError):
+        # No EXIF data or orientation info
+        pass
+    return img
